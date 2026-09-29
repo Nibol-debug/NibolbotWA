@@ -1,0 +1,41 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - DB_PATH=/app/data/nibolbot.db
+      - BOT_SERVICE_URL=http://bot:3001
+      - INTERNAL_TOKEN=${INTERNAL_TOKEN:-secret}
+      - JWT_SECRET=${JWT_SECRET:-changeme}
+    volumes:
+      - ./data:/app/data
+
+  bot:
+    build:
+      context: .
+      dockerfile: apps/bot/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - NODE_ENV=production
+      - API_URL=http://api:3000
+      - INTERNAL_TOKEN=${INTERNAL_TOKEN:-secret}
+      - SESSION_DIR=/app/data/session
+      - CACHE_DIR=/tmp/nibolbot
+    volumes:
+      - ./data:/app/data
+      - bot-cache:/tmp/nibolbot
+    depends_on:
+      - api
+
+# ponytail: volume lokal sederhana, upgrade ke bind-mount khusus jika butuh akses langsung file cache dari host
+volumes:
+  bot-cache:

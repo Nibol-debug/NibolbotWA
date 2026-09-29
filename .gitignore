@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.bun/
+
+# Build outputs
+dist/
+**/dist/
+
+# Session & Sensitive Data (Baileys creds & SQLite DB)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Environment & Config
+.env
+.env.*
+!.env.example
+
+# Logs & Temp
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+/tmp/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Editor & Agent files
+.claude/
+.vscode/

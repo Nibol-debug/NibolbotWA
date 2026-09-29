@@ -1,0 +1,21 @@
+{
+  "name": "nibolbot",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "bun --watch apps/api/src/index.ts",
+    "dev:bot": "bun --watch apps/bot/src/index.ts",
+    "dev:panel": "cd apps/panel && bun run dev",
+    "build:panel": "cd apps/panel && bun run build",
+    "test:baileys": "cd apps/bot && bun test-baileys.ts",
+    "test:core": "cd apps/bot && bun test-core.ts"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.5",
+    "youtubei.js": "^18.1.0"
+  }
+}

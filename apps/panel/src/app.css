@@ -1,0 +1,185 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+:root {
+  --bg-main: #f4fbf7;
+  --bg-card: #ffffff;
+  --bg-card-muted: #eef8f2;
+  --border-color: #0d1f14;
+  --border-width: 2.5px;
+  --shadow-offset: 4px;
+  --shadow-color: #0d1f14;
+  --hard-shadow: var(--shadow-offset) var(--shadow-offset) 0px var(--shadow-color);
+  --hard-shadow-sm: 2px 2px 0px var(--shadow-color);
+  --hard-shadow-lg: 6px 6px 0px var(--shadow-color);
+
+  /* Green Palette */
+  --green-primary: #10b981;
+  --green-primary-hover: #059669;
+  --green-light: #d1fae5;
+  --green-accent: #34d399;
+  --green-dark: #064e3b;
+  --green-text: #064e3b;
+
+  /* Accent states */
+  --accent-yellow: #fef08a;
+  --accent-red: #fecaca;
+  --accent-red-dark: #991b1b;
+  --text-main: #0d1f14;
+  --text-muted: #4b6354;
+
+  --font-main: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  font-family: var(--font-main);
+  min-height: 100vh;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Neubrutalism Base Utilities */
+.nb-card {
+  background: var(--bg-card);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: var(--hard-shadow);
+  padding: 1.25rem;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.nb-card-hover:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: var(--hard-shadow-lg);
+}
+
+.nb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-family: var(--font-main);
+  font-weight: 700;
+  font-size: 0.95rem;
+  padding: 0.6rem 1.2rem;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text-main);
+  box-shadow: var(--hard-shadow);
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.08s ease;
+  user-select: none;
+}
+
+.nb-btn:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: var(--hard-shadow-lg);
+}
+
+.nb-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0px var(--shadow-color);
+}
+
+.nb-btn-primary {
+  background: var(--green-primary);
+  color: #ffffff;
+}
+
+.nb-btn-primary:hover {
+  background: var(--green-primary-hover);
+}
+
+.nb-btn-light {
+  background: var(--green-light);
+  color: var(--green-dark);
+}
+
+.nb-btn-danger {
+  background: var(--accent-red);
+  color: var(--accent-red-dark);
+}
+
+.nb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.25rem 0.6rem;
+  border: 2px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: var(--hard-shadow-sm);
+  background: var(--bg-card);
+}
+
+.nb-badge-green {
+  background: var(--green-light);
+  color: var(--green-dark);
+}
+
+.nb-badge-yellow {
+  background: var(--accent-yellow);
+  color: #713f12;
+}
+
+.nb-badge-red {
+  background: var(--accent-red);
+  color: var(--accent-red-dark);
+}
+
+.nb-input, .nb-select, .nb-textarea {
+  width: 100%;
+  font-family: var(--font-main);
+  font-size: 0.95rem;
+  font-weight: 500;
+  padding: 0.65rem 0.85rem;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--text-main);
+  box-shadow: var(--hard-shadow-sm);
+  outline: none;
+  transition: all 0.1s ease;
+}
+
+.nb-input:focus, .nb-select:focus, .nb-textarea:focus {
+  border-color: var(--green-primary);
+  box-shadow: var(--hard-shadow);
+  transform: translate(-1px, -1px);
+}
+
+.nb-code {
+  font-family: var(--font-mono);
+  background: #ffffff;
+  border: 1.5px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.85em;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-main);
+  border-left: 2px solid var(--border-color);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--green-primary);
+  border: 2px solid var(--border-color);
+}
