@@ -30,6 +30,17 @@ export function getBotSettings(): BotSettings {
     ownersList = map.owners.split("\n").map(s => s.trim()).filter(Boolean);
   }
 
+  // Normalize owner numbers: convert 08xxx to 628xxx while preserving raw entries
+  ownersList = ownersList.map(o => {
+    let clean = o.trim().replace(/[^0-9]/g, "");
+    if (clean.startsWith("08")) {
+      clean = "628" + clean.slice(2);
+    } else if (clean.startsWith("0") && clean.length > 9) {
+      clean = "62" + clean.slice(1);
+    }
+    return clean || o.trim();
+  }).filter(Boolean);
+
   return {
     botName: map.bot_name || "nibolbot",
     prefix: map.prefix || ".",

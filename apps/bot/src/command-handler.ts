@@ -6,14 +6,98 @@ import type { PluginContext } from "@nibolbot/shared";
 // In-memory cooldown tracker: key -> timestamp expiry in ms
 const cooldowns = new Map<string, number>();
 
+export function normalizePhoneNumber(phone: string): string {
+  let clean = phone.replace(/[^0-9]/g, "");
+  if (clean.startsWith("08")) {
+    clean = "628" + clean.slice(2);
+  } else if (clean.startsWith("0")) {
+    clean = "62" + clean.slice(1);
+  }
+  return clean;
+}
+
+export function extractMessageContent(msg: proto.IMessage | null | undefined): any {
+  if (!msg) return null;
+  let content: any = msg;
+  while (
+    content?.ephemeralMessage?.message ||
+    content?.viewOnceMessage?.message ||
+    content?.viewOnceMessageV2?.message ||
+    content?.documentWithCaptionMessage?.message ||
+    content?.editedMessage?.message?.protocolMessage?.editedMessage
+  ) {
+    content =
+      content.ephemeralMessage?.message ||
+      content.viewOnceMessage?.message ||
+      content.viewOnceMessageV2?.message ||
+      content.documentWithCaptionMessage?.message ||
+      content.editedMessage?.message?.protocolMessage?.editedMessage;
+  }
+  return content;
+}
+
+export function extractMessageText(messageContent: any): string {
+  if (!messageContent) return "";
+  const unwrapped = extractMessageContent(messageContent);
+  if (!unwrapped) return "";
+
+  if (unwrapped.conversation) return unwrapped.conversation;
+  if (unwrapped.extendedTextMessage?.text) return unwrapped.extendedTextMessage.text;
+  if (unwrapped.imageMessage?.caption) return unwrapped.imageMessage.caption;
+  if (unwrapped.videoMessage?.caption) return unwrapped.videoMessage.caption;
+  if (unwrapped.documentMessage?.caption) return unwrapped.documentMessage.caption;
+
+  if (unwrapped.buttonsResponseMessage?.selectedButtonId) {
+    return unwrapped.buttonsResponseMessage.selectedButtonId;
+  }
+  if (unwrapped.templateButtonReplyMessage?.selectedId) {
+    return unwrapped.templateButtonReplyMessage.selectedId;
+  }
+  if (unwrapped.listResponseMessage?.singleSelectReply?.selectedRowId) {
+    return unwrapped.listResponseMessage.singleSelectReply.selectedRowId;
+  }
+  if (unwrapped.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson) {
+    try {
+      const parsed = JSON.parse(unwrapped.interactiveResponseMessage.nativeFlowResponseMessage.paramsJson);
+      if (parsed?.id) return parsed.id;
+    } catch {}
+  }
+
+  return "";
+}
+
+export function checkIsOwner(
+  sender: string,
+  msg: proto.IWebMessageInfo,
+  sock: WASocket,
+  owners: string[]
+): boolean {
+  if (msg.key.fromMe) return true;
+
+  const botId = sock.user?.id?.split(":")[0]?.replace(/[^0-9]/g, "");
+  const botLid = sock.user?.lid?.split(":")[0]?.replace(/[^0-9]/g, "");
+  const cleanSenderRaw = sender.split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+  const cleanSenderNormalized = normalizePhoneNumber(cleanSenderRaw);
+
+  if (botId && (cleanSenderNormalized === normalizePhoneNumber(botId) || cleanSenderRaw === botId)) return true;
+  if (botLid && cleanSenderRaw === botLid) return true;
+
+  return owners.some(owner => {
+    const rawOwner = owner.split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+    if (!rawOwner) return false;
+    const normOwner = normalizePhoneNumber(rawOwner);
+    return cleanSenderNormalized === normOwner || cleanSenderRaw === rawOwner;
+  });
+}
+
 export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessageInfo): Promise<void> {
-  if (!msg.message || msg.key.fromMe) return;
+  if (!msg.message) return;
 
   const from = msg.key.remoteJid;
   if (!from || from === "status@broadcast") return;
 
   const isGroup = from.endsWith("@g.us");
-  const sender = isGroup ? (msg.key.participant || from) : from;
+  const sender = isGroup ? (msg.key.participant || msg.participant || from) : from;
 
   // Auto-register group in database if new
   if (isGroup) {
@@ -26,21 +110,24 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
     }
   }
 
-  // Extract text from conversation, extended text, or media captions
-  const messageContent = msg.message;
-  const rawText =
-    messageContent.conversation ||
-    messageContent.extendedTextMessage?.text ||
-    messageContent.imageMessage?.caption ||
-    messageContent.videoMessage?.caption ||
-    messageContent.documentMessage?.caption ||
-    "";
-
-  const cleanText = rawText.trim();
+  // Extract text from unwrapped message
+  const rawText = extractMessageText(msg.message);
+  let cleanText = rawText.trim();
   if (!cleanText) return;
 
   const settings = getBotSettings();
   const prefix = settings.prefix || ".";
+
+  // Prevent bot responding to its own non-command messages
+  if (msg.key.fromMe && !cleanText.startsWith(prefix)) {
+    return;
+  }
+
+  // Support bot mention prefix in groups (e.g. "@bot .ping")
+  const botNumber = sock.user?.id ? sock.user.id.split(":")[0].replace(/[^0-9]/g, "") : "";
+  if (isGroup && botNumber && cleanText.startsWith(`@${botNumber}`)) {
+    cleanText = cleanText.slice(`@${botNumber}`.length).trim();
+  }
 
   if (!cleanText.startsWith(prefix)) return;
 
@@ -66,7 +153,7 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
   }
 
   // 3. Bot Mode Check (PRD P3: 'public' vs 'owner')
-  const isOwner = settings.owners.some(owner => sender.includes(owner.replace(/[^0-9]/g, "")));
+  const isOwner = checkIsOwner(sender, msg, sock, settings.owners);
   if (settings.mode === "owner" && !isOwner) {
     logCommand(sender, command, "BLOCKED");
     await sock.sendMessage(from, { text: "🔒 Bot sedang dalam mode khusus Owner." }, { quoted: msg });
@@ -123,8 +210,13 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
       payload = content;
     }
 
-    // Header channel B9: if newsletterJid is configured in settings
-    if (settings.newsletterJid && !payload.contextInfo?.forwardingScore) {
+    // Header channel B9: only if newsletterJid is valid and not dummy placeholder
+    const isValidNewsletter =
+      settings.newsletterJid &&
+      settings.newsletterJid.endsWith("@newsletter") &&
+      settings.newsletterJid !== "120363023456789@newsletter";
+
+    if (isValidNewsletter && !payload.contextInfo?.forwardingScore) {
       payload.contextInfo = {
         ...(payload.contextInfo || {}),
         forwardedNewsletterMessageInfo: {
@@ -136,7 +228,12 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
       };
     }
 
-    return sock.sendMessage(from, payload, { quoted: msg });
+    try {
+      return await sock.sendMessage(from, payload, { quoted: msg });
+    } catch {
+      // Fallback: send without quoted message if quote context fails in group
+      return await sock.sendMessage(from, payload);
+    }
   };
 
   const ctx: PluginContext = {
@@ -145,6 +242,7 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
     from,
     sender,
     isGroup,
+    isOwner,
     command,
     args,
     fullText: bodyWithoutPrefix.slice(command.length).trim(),

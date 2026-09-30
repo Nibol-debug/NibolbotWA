@@ -26,6 +26,7 @@ export interface PluginContext {
   from: string; // group or remote JID
   sender: string; // user JID
   isGroup: boolean;
+  isOwner: boolean;
   command: string;
   args: string[];
   fullText: string;

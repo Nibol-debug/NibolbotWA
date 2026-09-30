@@ -265,7 +265,7 @@
     owners: '6281234567890\n6289876543210',
     stickerPack: 'nibolbot.my.id',
     stickerAuthor: 'by @nibol',
-    newsletterJid: '120363023456789@newsletter',
+    newsletterJid: '',
     channelName: 'Nibolbot Updates',
     allowPm: true
   });
@@ -326,6 +326,19 @@
   async function handleSaveSettings() {
     isSaving = true;
     try {
+      const normalizedOwners = settings.owners
+        .split('\n')
+        .map((s: string) => {
+          let clean = s.trim().replace(/[^0-9]/g, '');
+          if (clean.startsWith('08')) {
+            clean = '628' + clean.slice(2);
+          } else if (clean.startsWith('0') && clean.length > 9) {
+            clean = '62' + clean.slice(1);
+          }
+          return clean || s.trim();
+        })
+        .filter(Boolean);
+
       await fetch(`${API}/api/settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -333,16 +346,18 @@
           bot_name: settings.botName,
           prefix: settings.prefix,
           mode: settings.mode,
-          owners: settings.owners.split('\n').map((s: string) => s.trim()).filter(Boolean),
+          owners: normalizedOwners,
           sticker_pack: settings.stickerPack,
           sticker_author: settings.stickerAuthor,
-          newsletter_jid: settings.newsletterJid,
+          newsletter_jid: settings.newsletterJid ? settings.newsletterJid.trim() : '',
           channel_name: settings.channelName,
           allow_pm: settings.allowPm,
           cache_ttl_minutes: cacheTtl,
           cache_max_mb: maxCacheLimit
         })
       });
+      // Update local view with normalized numbers
+      settings.owners = normalizedOwners.join('\n');
       showToast('✅ Pengaturan berhasil disimpan!');
     } catch {
       showToast('❌ Gagal menyimpan pengaturan');
@@ -906,7 +921,7 @@
               <div class="form-group full-width">
                 <label for="owner-list" class="input-label">Daftar Nomor Owner (Satu nomor per baris):</label>
                 <textarea id="owner-list" class="nb-textarea" rows="3" bind:value={settings.owners}></textarea>
-                <small class="helper-text">Nomor owner memiliki akses bypass limit dan pengaturan bot.</small>
+                <small class="helper-text">Format: 08xxx atau 628xxx atau ID LID grup. Nomor owner memiliki akses bypass limit dan mode khusus owner.</small>
               </div>
 
               <div class="form-group">
