@@ -10,42 +10,44 @@ interface InteractiveButton {
 
 interface SendInteractiveOpts {
   to: string;
-  title: string;
+  title?: string;
   body: string;
-  footer: string;
+  footer?: string;
   buttons: InteractiveButton[];
   thumbnail?: Buffer;
   contextInfo?: any;
+  useViewOnce?: boolean;
 }
 
 export async function sendInteractiveMessage(sock: WASocket, opts: SendInteractiveOpts) {
-  let header: proto.Message.InteractiveMessage.IHeader = {
-    title: opts.title,
-    hasMediaAttachment: false
-  };
+  let header: proto.Message.InteractiveMessage.IHeader | undefined = undefined;
 
-  if (opts.thumbnail) {
-    try {
-      const media = await prepareWAMessageMedia(
-        { image: opts.thumbnail },
-        { upload: sock.waUploadToServer }
-      );
-      if (media.imageMessage) {
-        header = {
-          title: opts.title,
-          hasMediaAttachment: true,
-          imageMessage: media.imageMessage
-        };
+  if (opts.title || opts.thumbnail) {
+    header = {
+      title: opts.title || "",
+      hasMediaAttachment: false
+    };
+
+    if (opts.thumbnail) {
+      try {
+        const media = await prepareWAMessageMedia(
+          { image: opts.thumbnail },
+          { upload: sock.waUploadToServer }
+        );
+        if (media.imageMessage) {
+          header.hasMediaAttachment = true;
+          header.imageMessage = media.imageMessage;
+        }
+      } catch {
+        header = { title: opts.title || "", hasMediaAttachment: false };
       }
-    } catch {
-      header = { title: opts.title, hasMediaAttachment: false };
     }
   }
 
   const interactiveMsg: proto.Message.IInteractiveMessage = {
     header,
     body: { text: opts.body },
-    footer: { text: opts.footer },
+    footer: opts.footer ? { text: opts.footer } : undefined,
     contextInfo: opts.contextInfo || undefined,
     nativeFlowMessage: {
       buttons: opts.buttons.map(b => ({
@@ -56,13 +58,25 @@ export async function sendInteractiveMessage(sock: WASocket, opts: SendInteracti
     }
   };
 
-  const fullMsg = generateWAMessageFromContent(opts.to, {
-    viewOnceMessage: {
-      message: {
-        interactiveMessage: interactiveMsg
+  const useVO = opts.useViewOnce !== false;
+  const messageContent: proto.IMessage = useVO
+    ? {
+        viewOnceMessage: {
+          message: {
+            interactiveMessage: interactiveMsg
+          }
+        }
       }
-    }
-  }, {});
+    : {
+        interactiveMessage: interactiveMsg
+      };
+
+  const fullMsg = generateWAMessageFromContent(opts.to, messageContent, {});
+
+  console.log("\n==================== [RELAY PAYLOAD FINAL] ====================");
+  console.log(`To: ${opts.to} | Wrapper: ${useVO ? "viewOnceMessage" : "direct"}`);
+  console.log(JSON.stringify(fullMsg.message, null, 2));
+  console.log("===============================================================\n");
 
   await sock.relayMessage(opts.to, fullMsg.message!, {
     messageId: fullMsg.key.id!
@@ -76,20 +90,13 @@ export function buildPlayCard(song: YouTubeResult, botName: string, webPlayerUrl
     buttons.push({
       name: "cta_url",
       buttonParamsJson: JSON.stringify({
-        display_text: "🎧 Putar di Web",
+        display_text: "▶️ Play Video",
         url: webPlayerUrl,
-        merchant_url: webPlayerUrl
+        merchant_url: webPlayerUrl,
+        webview_presentation: "FULL"
       })
     });
   }
-
-  buttons.push({
-    name: "cta_copy",
-    buttonParamsJson: JSON.stringify({
-      display_text: "📋 Salin Link",
-      copy_code: `https://youtu.be/${song.id}`
-    })
-  });
 
   return buttons;
 }

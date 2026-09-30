@@ -7,14 +7,16 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import { Boom } from "@hapi/boom";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, rmSync, readFileSync, statSync, unlinkSync, readdirSync } from "node:fs";
+import { resolve, join } from "node:path";
+import { execSync } from "node:child_process";
 import { loadPlugins } from "./plugin-loader";
 import { handleIncomingMessage } from "./command-handler";
 import { scheduleCacheCleanup } from "./lib/cache";
 import { createPlayerToken, getPlayerToken } from "./lib/player";
+import { getVideoInfo } from "./lib/youtube";
+import { getVideoStreamUrl, invalidateStreamCache } from "./lib/stream";
 import { db } from "./db";
-import { spawn } from "node:child_process";
 
 // Process hardening
 process.on("uncaughtException", (err) => {
@@ -211,48 +213,92 @@ Bun.serve({
     }
 
     if (url.pathname.startsWith("/player-info/")) {
-      const tokenId = url.pathname.split("/player-info/")[1];
-      const info = getPlayerToken(tokenId);
-      if (!info) return Response.json({ error: "Token expired or not found" }, { status: 404 });
+      const id = url.pathname.split("/player-info/")[1];
+      let info = getPlayerToken(id);
+      if (!info && /^[a-zA-Z0-9_-]{11}$/.test(id)) {
+        const yt = await getVideoInfo(id);
+        if (yt) {
+          info = {
+            videoId: yt.id,
+            title: yt.title,
+            channel: yt.channel,
+            duration: yt.duration,
+            thumbnail: yt.thumbnail
+          };
+        }
+      }
+      if (!info) return Response.json({ error: "Video not found or token expired" }, { status: 404 });
       return Response.json(info);
     }
 
     if (url.pathname.startsWith("/stream/")) {
-      const tokenId = url.pathname.split("/stream/")[1];
-      const info = getPlayerToken(tokenId);
-      if (!info) return new Response("Token expired", { status: 404 });
+      const id = url.pathname.split("/stream/")[1];
+      let videoId = id;
+      const info = getPlayerToken(id);
+      if (info) videoId = info.videoId;
 
-      // Stream audio from yt-dlp directly to response (no file on disk)
-      const ytUrl = `https://www.youtube.com/watch?v=${info.videoId}`;
-      const proc = spawn("yt-dlp", [
-        "-f", "bestaudio",
+      if (!videoId) return new Response("Token expired or missing video ID", { status: 404 });
+
+      // 1. Attempt direct proxy streaming (zero disk, low RAM, fast seek)
+      let streamUrl = await getVideoStreamUrl(videoId);
+      if (streamUrl) {
+        const rangeHeader = req.headers.get("range");
+        const fetchHeaders: Record<string, string> = {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        };
+        if (rangeHeader) fetchHeaders["Range"] = rangeHeader;
+
+        try {
+          let upstream = await fetch(streamUrl, { headers: fetchHeaders });
+          if (upstream.status === 403) {
+            invalidateStreamCache(videoId);
+            streamUrl = await getVideoStreamUrl(videoId);
+            if (streamUrl) {
+              upstream = await fetch(streamUrl, { headers: fetchHeaders });
+            }
+          }
+
+          if (upstream.ok || upstream.status === 206) {
+            const respHeaders = new Headers();
+            respHeaders.set("Content-Type", upstream.headers.get("content-type") || "video/mp4");
+            respHeaders.set("Accept-Ranges", "bytes");
+            respHeaders.set("Access-Control-Allow-Origin", "*");
+            respHeaders.set("Cache-Control", "public, max-age=3600");
+
+            const cl = upstream.headers.get("content-length");
+            if (cl) respHeaders.set("Content-Length", cl);
+
+            const cr = upstream.headers.get("content-range");
+            if (cr) respHeaders.set("Content-Range", cr);
+
+            return new Response(upstream.body, {
+              status: upstream.status,
+              headers: respHeaders
+            });
+          }
+        } catch (err) {
+          console.error(`Direct stream proxy failed for ${videoId}:`, err);
+        }
+      }
+
+      // 2. Fallback: pipe streaming via yt-dlp spawn
+      const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      const proc = Bun.spawn([
+        "yt-dlp",
+        "-f", "best[ext=mp4]/18/22/best",
         "-o", "-",
         "--no-playlist",
         "--no-warnings",
         "--quiet",
         ytUrl
-      ], { stdio: ["ignore", "pipe", "ignore"] });
+      ], { stdout: "pipe", stderr: "ignore" });
 
-      const stream = new ReadableStream({
-        start(controller) {
-          proc.stdout.on("data", (chunk: Buffer) => {
-            controller.enqueue(new Uint8Array(chunk));
-          });
-          proc.stdout.on("end", () => controller.close());
-          proc.stdout.on("error", () => controller.close());
-          proc.on("error", () => controller.close());
-        },
-        cancel() {
-          proc.kill();
-        }
-      });
-
-      return new Response(stream, {
+      return new Response(proc.stdout, {
         headers: {
-          "Content-Type": "audio/webm",
-          "Transfer-Encoding": "chunked",
-          "Cache-Control": "no-cache",
-          "Access-Control-Allow-Origin": "*"
+          "Content-Type": "video/mp4",
+          "Accept-Ranges": "none",
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "no-cache"
         }
       });
     }

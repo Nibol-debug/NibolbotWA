@@ -2,6 +2,7 @@ import { definePlugin } from "@nibolbot/shared";
 import { searchYouTube, formatDuration } from "../lib/youtube";
 import { buildSearchCarousel, sendCarouselMessage } from "../lib/interactive";
 import { createPlayerToken } from "../lib/player";
+import { getPlayerUrl } from "../lib/config";
 
 export default definePlugin({
   name: "search",
@@ -28,12 +29,10 @@ export default definePlugin({
       return;
     }
 
-    const apiBase = process.env.API_URL || "http://localhost:3000";
-
     // Build cards with web player links
     const cards = results.map((song) => {
       const token = createPlayerToken(song.id, song.title, song.channel, song.duration, song.thumbnail);
-      const webUrl = `${apiBase}/p/${token}`;
+      const webUrl = getPlayerUrl(token);
 
       return {
         header: { title: song.title },

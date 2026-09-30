@@ -84,7 +84,7 @@ export async function getVideoInfo(urlOrId: string): Promise<YouTubeResult | nul
   }
 }
 
-function extractVideoId(input: string): string | null {
+export function extractVideoId(input: string): string | null {
   if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
   const m = input.match(
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/

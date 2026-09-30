@@ -35,7 +35,7 @@ export function getBotSettings(): BotSettings {
     prefix: map.prefix || ".",
     mode: map.mode || "public",
     owners: ownersList,
-    stickerPack: map.sticker_pack || "nibolbot.my.id",
+    stickerPack: map.sticker_pack || "nibol.my.id",
     stickerAuthor: map.sticker_author || "by @nibol",
     newsletterJid: map.newsletter_jid,
     channelName: map.channel_name

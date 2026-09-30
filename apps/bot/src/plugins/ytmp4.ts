@@ -5,6 +5,7 @@ import { enqueue } from "../lib/queue";
 import { getCacheDir, isCacheFull } from "../lib/cache";
 import { sendInteractiveMessage, fetchThumbnailBuffer } from "../lib/interactive";
 import { createPlayerToken } from "../lib/player";
+import { getPlayerUrl } from "../lib/config";
 import { readFileSync } from "node:fs";
 
 export default definePlugin({
@@ -51,8 +52,7 @@ export default definePlugin({
 
     // Create web player token for audio preview
     const token = createPlayerToken(info.id, info.title, info.channel, info.duration, info.thumbnail);
-    const apiBase = process.env.API_URL || "http://localhost:3000";
-    const webPlayerUrl = `${apiBase}/p/${token}`;
+    const webPlayerUrl = getPlayerUrl(token);
 
     const contextInfo = settings.newsletterJid ? {
       forwardedNewsletterMessageInfo: {

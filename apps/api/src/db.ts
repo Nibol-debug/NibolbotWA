@@ -73,7 +73,7 @@ if (count.c === 0) {
     ['bot_name', 'nibolbot'],
     ['prefix', '.'],
     ['mode', 'public'],
-    ['sticker_pack', 'nibolbot.my.id'],
+    ['sticker_pack', 'nibol.my.id'],
     ['sticker_author', 'by @nibol'],
     ['cache_ttl_minutes', '30'],
     ['cache_max_mb', '300']

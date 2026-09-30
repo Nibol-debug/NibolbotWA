@@ -32,7 +32,7 @@ process.on("unhandledRejection", (reason) => {
 
 export const app = new Elysia()
   .use(cors({
-    origin: ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
+    origin: ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "https://nibol.my.id", "https://nibolbot.my.id"],
     credentials: true
   }))
   .use(
@@ -263,7 +263,7 @@ export const app = new Elysia()
     }
   })
 
-  // --- Web Player (PRD B5: /p/:id) ---
+  // --- Web Player & Stream (PRD B5: /p/:id & /stream/:id) ---
   .get("/api/player/:id", async ({ params }) => {
     try {
       const res = await fetch(`${botUrl}/player-info/${params.id}`, {
@@ -275,19 +275,58 @@ export const app = new Elysia()
       return { error: "Bot service unreachable" };
     }
   })
-  .get("/api/stream/:id", async ({ params, set }) => {
+  .get("/stream/:id", async ({ params, set, request }) => {
     try {
-      const res = await fetch(`${botUrl}/stream/${params.id}`, {
-        headers: { "x-internal-token": internalToken }
-      });
-      if (!res.ok) {
-        set.status = 404;
-        return "Token expired";
+      const headers: Record<string, string> = { "x-internal-token": internalToken };
+      const range = request.headers.get("range");
+      if (range) headers["range"] = range;
+
+      const res = await fetch(`${botUrl}/stream/${params.id}`, { headers });
+      if (!res.ok && res.status !== 206) {
+        set.status = res.status;
+        return res.status === 404 ? "Token expired or not found" : "Stream failed";
       }
-      set.headers["content-type"] = res.headers.get("content-type") || "audio/webm";
-      set.headers["transfer-encoding"] = "chunked";
-      set.headers["cache-control"] = "no-cache";
+
+      set.status = res.status; // 200 or 206
+      set.headers["content-type"] = res.headers.get("content-type") || "video/mp4";
+      set.headers["accept-ranges"] = "bytes";
       set.headers["access-control-allow-origin"] = "*";
+      set.headers["cache-control"] = "public, max-age=3600";
+
+      const cl = res.headers.get("content-length");
+      if (cl) set.headers["content-length"] = cl;
+      const cr = res.headers.get("content-range");
+      if (cr) set.headers["content-range"] = cr;
+
+      return res.body;
+    } catch {
+      set.status = 502;
+      return "Stream unavailable";
+    }
+  })
+  .get("/api/stream/:id", async ({ params, set, request }) => {
+    try {
+      const headers: Record<string, string> = { "x-internal-token": internalToken };
+      const range = request.headers.get("range");
+      if (range) headers["range"] = range;
+
+      const res = await fetch(`${botUrl}/stream/${params.id}`, { headers });
+      if (!res.ok && res.status !== 206) {
+        set.status = res.status;
+        return res.status === 404 ? "Token expired or not found" : "Stream failed";
+      }
+
+      set.status = res.status; // 200 or 206
+      set.headers["content-type"] = res.headers.get("content-type") || "video/mp4";
+      set.headers["accept-ranges"] = "bytes";
+      set.headers["access-control-allow-origin"] = "*";
+      set.headers["cache-control"] = "public, max-age=3600";
+
+      const cl = res.headers.get("content-length");
+      if (cl) set.headers["content-length"] = cl;
+      const cr = res.headers.get("content-range");
+      if (cr) set.headers["content-range"] = cr;
+
       return res.body;
     } catch {
       set.status = 502;
@@ -302,319 +341,475 @@ export const app = new Elysia()
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Nibolbot Web Player</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Nibolbot Video Player</title>
+  <meta property="og:title" content="Nibolbot Video Player">
+  <meta property="og:description" content="Putar video langsung di WhatsApp WebView / Browser">
+  <meta property="og:type" content="video.other">
+  <meta property="og:site_name" content="Nibolbot">
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --green: #10b981;
-      --green-dark: #064e3b;
-      --green-light: #d1fae5;
-      --border: #0d1f14;
-      --bg: #f4fbf7;
-      --shadow: 5px 5px 0px #0d1f14;
-      --shadow-sm: 3px 3px 0px #0d1f14;
+      --primary: #10b981;
+      --primary-dark: #059669;
+      --bg: #090d0b;
+      --card: #131b16;
+      --border: #1f2e25;
+      --text: #f0fdf4;
+      --muted: #86a393;
     }
-    * { margin:0; padding:0; box-sizing:border-box; }
+    * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
     body {
-      font-family: 'Space Grotesk', system-ui, sans-serif;
+      font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
       background: var(--bg);
-      color: var(--border);
+      color: var(--text);
       min-height: 100vh;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      overflow-x: hidden;
+    }
+    .wrapper {
+      width: 100%;
+      max-width: 600px;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      height: 100dvh;
+    }
+    /* Video viewport */
+    .video-box {
+      position: relative;
+      width: 100%;
+      background: #000;
+      aspect-ratio: 16/9;
+      max-height: 55vh;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 1rem;
-    }
-    .player {
-      background: #fff;
-      border: 3px solid var(--border);
-      border-radius: 12px;
-      box-shadow: var(--shadow);
-      max-width: 420px;
-      width: 100%;
       overflow: hidden;
     }
-    .cover-wrap {
-      position: relative;
-      width: 100%;
-      aspect-ratio: 16/9;
-      background: #000;
-      overflow: hidden;
-    }
-    .cover-wrap img {
+    video {
       width: 100%;
       height: 100%;
-      object-fit: cover;
-      opacity: 0.85;
+      object-fit: contain;
+      background: #000;
     }
-    .cover-badge {
+    /* Overlays */
+    .badge {
       position: absolute;
       top: 12px;
       left: 12px;
+      background: rgba(16, 185, 129, 0.9);
+      color: #000;
+      font-weight: 700;
       font-size: 0.7rem;
-      font-weight: 700;
-      background: var(--green);
-      color: #fff;
-      border: 2px solid var(--border);
-      padding: 4px 10px;
+      padding: 4px 8px;
       border-radius: 4px;
-      box-shadow: var(--shadow-sm);
       letter-spacing: 0.05em;
+      z-index: 10;
+      pointer-events: none;
     }
-    .info {
-      padding: 1.25rem 1.5rem 1rem;
-    }
-    .song-title {
-      font-size: 1.15rem;
-      font-weight: 700;
-      line-height: 1.3;
-      margin-bottom: 0.25rem;
-    }
-    .song-meta {
-      font-size: 0.85rem;
-      color: #4b6354;
-      margin-bottom: 1rem;
-    }
-    .controls {
-      padding: 0 1.5rem 1.5rem;
-    }
-    /* Progress bar */
-    .progress-wrap {
-      width: 100%;
-      margin-bottom: 0.75rem;
-    }
-    .progress-bar {
-      width: 100%;
-      height: 10px;
-      background: #e2e8f0;
-      border: 2px solid var(--border);
-      border-radius: 5px;
-      overflow: hidden;
-      cursor: pointer;
-    }
-    .progress-fill {
-      height: 100%;
-      background: var(--green);
-      width: 0%;
-      transition: width 0.3s linear;
-    }
-    .time-row {
+    .big-play {
+      position: absolute;
+      width: 68px;
+      height: 68px;
+      border-radius: 50%;
+      background: var(--primary);
+      color: #000;
+      border: 3px solid #fff;
       display: flex;
-      justify-content: space-between;
-      font-size: 0.75rem;
-      font-weight: 600;
-      color: #4b6354;
-      margin-top: 4px;
-      font-family: 'Space Grotesk', monospace;
-    }
-    /* Buttons */
-    .btn-row {
-      display: flex;
-      gap: 0.75rem;
       align-items: center;
       justify-content: center;
-    }
-    .play-btn {
-      width: 56px; height: 56px;
-      border-radius: 50%;
-      background: var(--green);
-      color: #fff;
-      border: 3px solid var(--border);
-      box-shadow: var(--shadow-sm);
-      font-size: 1.5rem;
+      font-size: 1.8rem;
       cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      transition: all 0.1s;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+      transition: transform 0.15s, opacity 0.2s;
+      z-index: 15;
     }
-    .play-btn:hover { transform: translate(-2px,-2px); box-shadow: var(--shadow); }
-    .play-btn:active { transform: translate(2px,2px); box-shadow: 1px 1px 0 var(--border); }
-    .side-btn {
-      width: 40px; height: 40px;
+    .big-play:active { transform: scale(0.9); }
+    .big-play.hidden { opacity: 0; pointer-events: none; }
+    /* Loading spinner */
+    .spinner {
+      position: absolute;
+      width: 44px;
+      height: 44px;
+      border: 4px solid rgba(16,185,129,0.3);
+      border-top-color: var(--primary);
       border-radius: 50%;
-      background: #fff;
-      border: 2.5px solid var(--border);
-      box-shadow: 2px 2px 0 var(--border);
-      font-size: 1rem;
-      cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
+      animation: spin 0.8s linear infinite;
+      z-index: 12;
+      display: none;
     }
-    /* Volume */
-    .volume-row {
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* Controls bar */
+    .controls {
+      background: rgba(19, 27, 22, 0.95);
+      border-bottom: 2px solid var(--border);
+      padding: 0.6rem 0.8rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .progress-wrap {
+      width: 100%;
+      height: 6px;
+      background: #23342a;
+      border-radius: 3px;
+      position: relative;
+      cursor: pointer;
+      padding: 4px 0;
+      background-clip: content-box;
+    }
+    .progress-fill {
+      height: 6px;
+      background: var(--primary);
+      width: 0%;
+      border-radius: 3px;
+      pointer-events: none;
+      transition: width 0.1s linear;
+    }
+    .control-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+    .ctrl-group {
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      margin-top: 1rem;
-      padding: 0 1.5rem 1.25rem;
     }
-    .vol-icon { font-size: 0.9rem; }
-    .vol-slider {
-      flex: 1;
-      accent-color: var(--green);
-      height: 6px;
-    }
-    /* Footer */
-    .footer {
-      text-align: center;
-      padding: 0.75rem;
-      border-top: 2.5px solid var(--border);
-      background: var(--green-light);
-    }
-    .footer a {
-      display: inline-block;
-      font-weight: 700;
-      font-size: 0.85rem;
-      text-decoration: none;
-      color: var(--green-dark);
-      background: #fff;
-      border: 2px solid var(--border);
+    .cbtn {
+      background: none;
+      border: none;
+      color: var(--text);
+      font-size: 1.15rem;
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
       border-radius: 6px;
-      box-shadow: 2px 2px 0 var(--border);
-      padding: 0.4rem 1rem;
-      transition: all 0.1s;
+      transition: background 0.15s;
     }
-    .footer a:hover { transform: translate(-1px,-1px); box-shadow: var(--shadow-sm); }
-    /* Loading */
-    .loading {
+    .cbtn:active { background: var(--border); }
+    .time-text {
+      font-size: 0.75rem;
+      color: var(--muted);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .vol-slider {
+      width: 60px;
+      height: 4px;
+      accent-color: var(--primary);
+      cursor: pointer;
+    }
+    /* Details section */
+    .meta-box {
+      flex: 1;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      overflow-y: auto;
+    }
+    .vtitle {
+      font-size: 1.05rem;
+      font-weight: 700;
+      line-height: 1.35;
+      color: var(--text);
+    }
+    .vinfo {
+      font-size: 0.8rem;
+      color: var(--muted);
+      display: flex;
+      gap: 0.6rem;
+      align-items: center;
+    }
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+    .btn-act {
+      background: var(--card);
+      border: 1.5px solid var(--border);
+      color: var(--text);
+      padding: 0.6rem;
+      border-radius: 8px;
+      text-align: center;
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+    }
+    .btn-act:active { border-color: var(--primary); }
+    .btn-back {
+      grid-column: 1 / -1;
+      background: var(--primary);
+      color: #000;
+      font-weight: 700;
+      border: none;
+    }
+    /* Status banner */
+    .status-msg {
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-align: center;
+      min-height: 1.2em;
+    }
+    /* Error / Initial Loading State */
+    .center-state {
       text-align: center;
       padding: 3rem 1.5rem;
-      font-weight: 700;
-      color: #4b6354;
     }
-    .spinner {
-      display: inline-block;
-      width: 32px; height: 32px;
-      border: 4px solid var(--green-light);
-      border-top-color: var(--green);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      margin-bottom: 0.75rem;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .error-card {
-      text-align: center;
-      padding: 2rem 1.5rem;
-    }
-    .error-card .emoji { font-size: 3rem; margin-bottom: 0.75rem; }
+    .center-state .ico { font-size: 2.5rem; margin-bottom: 0.5rem; }
   </style>
 </head>
 <body>
-  <div class="player" id="app">
-    <div class="loading" id="loading-state">
-      <div class="spinner"></div>
-      <div>Memuat lagu...</div>
+  <div class="wrapper" id="app">
+    <div class="center-state">
+      <div class="spinner" style="display:inline-block;position:static;margin-bottom:0.75rem;"></div>
+      <div style="font-weight:600;color:var(--muted)">Menyiapkan video...</div>
     </div>
   </div>
 
   <script>
-    const TOKEN = "${id}";
+    const T = "${id}";
     const API = location.origin;
     const app = document.getElementById("app");
 
-    function fmt(sec) {
-      const m = Math.floor(sec / 60);
-      const s = Math.floor(sec % 60);
-      return m + ":" + String(s).padStart(2, "0");
+    function fmt(s) {
+      if (!s || isNaN(s)) return "0:00";
+      const m = Math.floor(s / 60);
+      const sec = Math.floor(s % 60);
+      return m + ":" + String(sec).padStart(2, "0");
+    }
+    function esc(s) {
+      const d = document.createElement("div");
+      d.textContent = s || "";
+      return d.innerHTML;
     }
 
     async function init() {
       let info;
       try {
-        const res = await fetch(API + "/api/player/" + TOKEN);
-        info = await res.json();
-      } catch(e) {
-        app.innerHTML = '<div class="error-card"><div class="emoji">😵</div><div><strong>Gagal memuat</strong></div><p style="margin-top:0.5rem;font-size:0.85rem;color:#4b6354">Server tidak merespon. Coba lagi nanti.</p></div>';
+        const r = await fetch(API + "/api/player/" + T);
+        info = await r.json();
+      } catch (err) {
+        app.innerHTML = '<div class="center-state"><div class="ico">😵</div><b>Gagal terhubung ke server</b></div>';
         return;
       }
 
       if (info.error) {
-        app.innerHTML = '<div class="error-card"><div class="emoji">⏰</div><div><strong>Link Kedaluwarsa</strong></div><p style="margin-top:0.5rem;font-size:0.85rem;color:#4b6354">Token web player ini sudah expired. Minta link baru di WhatsApp.</p></div>';
+        app.innerHTML = '<div class="center-state"><div class="ico">⏰</div><b>Video Tidak Ditemukan atau Link Kedaluwarsa</b><p style="margin-top:.5rem;font-size:.8rem;color:var(--muted)">Kirim ulang perintah .play di WhatsApp.</p></div>';
         return;
       }
 
-      document.title = info.title + " - Nibolbot Player";
+      document.title = info.title + " - Nibolbot";
 
       app.innerHTML = \`
-        <div class="cover-wrap">
-          <img src="\${info.thumbnail}" alt="Cover" onerror="this.style.display='none'">
-          <div class="cover-badge">🤖 NIBOLBOT PLAYER</div>
+        <div class="video-box" id="vbox">
+          <div class="badge">🤖 NIBOLBOT</div>
+          <video
+            id="vid"
+            playsinline
+            webkit-playsinline
+            x5-playsinline
+            poster="\${info.thumbnail || ''}"
+            preload="metadata"
+          ></video>
+          <button class="big-play" id="bp">▶</button>
+          <div class="spinner" id="sp"></div>
         </div>
-        <div class="info">
-          <div class="song-title">\${esc(info.title)}</div>
-          <div class="song-meta">👤 \${esc(info.channel)} · ⏱️ \${fmt(info.duration)}</div>
-        </div>
+
         <div class="controls">
-          <div class="progress-wrap">
-            <div class="progress-bar" id="pbar">
-              <div class="progress-fill" id="pfill"></div>
+          <div class="progress-wrap" id="pbar">
+            <div class="progress-fill" id="pfill"></div>
+          </div>
+          <div class="control-row">
+            <div class="ctrl-group">
+              <button class="cbtn" id="pbtn" title="Play/Pause">▶</button>
+              <button class="cbtn" id="rew" title="-10s">⏪</button>
+              <button class="cbtn" id="fwd" title="+10s">⏩</button>
+              <span class="time-text"><span id="tcur">0:00</span> / <span id="tdur">\${fmt(info.duration)}</span></span>
             </div>
-            <div class="time-row">
-              <span id="tcur">0:00</span>
-              <span id="tdur">\${fmt(info.duration)}</span>
+            <div class="ctrl-group">
+              <button class="cbtn" id="mbtn" title="Mute">🔊</button>
+              <input type="range" min="0" max="100" value="100" class="vol-slider" id="vol">
+              <button class="cbtn" id="fsbtn" title="Fullscreen">⛶</button>
             </div>
           </div>
-          <div class="btn-row">
-            <button class="side-btn" id="rew" title="Mundur 10 detik">⏪</button>
-            <button class="play-btn" id="pbtn" title="Play/Pause">▶</button>
-            <button class="side-btn" id="fwd" title="Maju 10 detik">⏩</button>
+        </div>
+
+        <div class="meta-box">
+          <div>
+            <div class="vtitle">\${esc(info.title)}</div>
+            <div class="vinfo" style="margin-top:4px;">
+              <span>👤 \${esc(info.channel)}</span>
+              <span>•</span>
+              <span>⏱️ \${fmt(info.duration)}</span>
+            </div>
           </div>
-        </div>
-        <div class="volume-row">
-          <span class="vol-icon">🔊</span>
-          <input type="range" min="0" max="100" value="80" class="vol-slider" id="vol">
-        </div>
-        <div class="footer">
-          <a href="https://wa.me" target="_blank">💬 Kembali ke WhatsApp</a>
+
+          <div class="status-msg" id="st"></div>
+
+          <div class="actions">
+            <a href="https://wa.me" class="btn-act btn-back">💬 Buka WhatsApp</a>
+            <div class="btn-act" style="cursor:default">🎧 .ytmp3 \${esc(info.videoId)}</div>
+            <div class="btn-act" style="cursor:default">🎬 .ytmp4 \${esc(info.videoId)}</div>
+          </div>
         </div>
       \`;
 
-      const audio = new Audio(API + "/api/stream/" + TOKEN);
-      audio.volume = 0.8;
-      audio.preload = "auto";
+      const vid = document.getElementById("vid"),
+            bp = document.getElementById("bp"),
+            sp = document.getElementById("sp"),
+            pbtn = document.getElementById("pbtn"),
+            pbar = document.getElementById("pbar"),
+            pfill = document.getElementById("pfill"),
+            tcur = document.getElementById("tcur"),
+            tdur = document.getElementById("tdur"),
+            rew = document.getElementById("rew"),
+            fwd = document.getElementById("fwd"),
+            vol = document.getElementById("vol"),
+            mbtn = document.getElementById("mbtn"),
+            fsbtn = document.getElementById("fsbtn"),
+            st = document.getElementById("st"),
+            vbox = document.getElementById("vbox");
 
-      const pbtn = document.getElementById("pbtn");
-      const pfill = document.getElementById("pfill");
-      const tcur = document.getElementById("tcur");
-      const pbar = document.getElementById("pbar");
-      const vol = document.getElementById("vol");
+      let loaded = false;
 
-      let playing = false;
+      function setStatus(t) { st.textContent = t; }
 
-      pbtn.onclick = () => {
-        if (playing) { audio.pause(); pbtn.textContent = "▶"; }
-        else { audio.play(); pbtn.textContent = "⏸"; }
-        playing = !playing;
+      function loadVideo() {
+        if (!loaded) {
+          setStatus("⏳ Mengambil stream video...");
+          sp.style.display = "block";
+          bp.classList.add("hidden");
+          vid.src = API + "/stream/" + T;
+          vid.load();
+          loaded = true;
+        }
+      }
+
+      function togglePlay() {
+        loadVideo();
+        if (vid.paused) {
+          vid.play().then(() => {
+            pbtn.textContent = "⏸";
+            bp.classList.add("hidden");
+            setStatus("");
+          }).catch(err => {
+            console.warn("Play error:", err);
+            bp.classList.remove("hidden");
+            pbtn.textContent = "▶";
+          });
+        } else {
+          vid.pause();
+          pbtn.textContent = "▶";
+          bp.classList.remove("hidden");
+        }
+      }
+
+      bp.onclick = togglePlay;
+      pbtn.onclick = togglePlay;
+      vid.onclick = togglePlay;
+
+      rew.onclick = () => { vid.currentTime = Math.max(0, vid.currentTime - 10); };
+      fwd.onclick = () => { vid.currentTime = Math.min(vid.duration || 99999, vid.currentTime + 10); };
+
+      vid.onwaiting = () => { sp.style.display = "block"; };
+      vid.onplaying = () => {
+        sp.style.display = "none";
+        bp.classList.add("hidden");
+        pbtn.textContent = "⏸";
+        setStatus("");
       };
-
-      document.getElementById("rew").onclick = () => { audio.currentTime = Math.max(0, audio.currentTime - 10); };
-      document.getElementById("fwd").onclick = () => { audio.currentTime += 10; };
-      vol.oninput = () => { audio.volume = vol.value / 100; };
-
-      audio.ontimeupdate = () => {
-        if (!audio.duration) return;
-        const pct = (audio.currentTime / audio.duration) * 100;
+      vid.onpause = () => {
+        pbtn.textContent = "▶";
+        bp.classList.remove("hidden");
+      };
+      vid.oncanplay = () => {
+        sp.style.display = "none";
+        if (vid.duration) tdur.textContent = fmt(vid.duration);
+      };
+      vid.ontimeupdate = () => {
+        if (!vid.duration) return;
+        const pct = (vid.currentTime / vid.duration) * 100;
         pfill.style.width = pct + "%";
-        tcur.textContent = fmt(audio.currentTime);
+        tcur.textContent = fmt(vid.currentTime);
+      };
+      vid.onended = () => {
+        pbtn.textContent = "▶";
+        bp.classList.remove("hidden");
+        pfill.style.width = "0%";
+      };
+      vid.onerror = () => {
+        sp.style.display = "none";
+        bp.classList.remove("hidden");
+        setStatus("❌ Gagal memutar video. Coba refresh.");
       };
 
-      pbar.onclick = (e) => {
-        if (!audio.duration) return;
+      // Progress bar seek (mouse + touch)
+      function seek(clientX) {
+        if (!vid.duration) return;
         const rect = pbar.getBoundingClientRect();
-        const pct = (e.clientX - rect.left) / rect.width;
-        audio.currentTime = pct * audio.duration;
+        const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        vid.currentTime = pos * vid.duration;
+      }
+      pbar.onclick = (e) => seek(e.clientX);
+      pbar.ontouchstart = (e) => { if (e.touches && e.touches[0]) seek(e.touches[0].clientX); };
+      pbar.ontouchmove = (e) => { if (e.touches && e.touches[0]) seek(e.touches[0].clientX); };
+
+      // Volume & mute
+      vol.oninput = () => {
+        vid.volume = vol.value / 100;
+        vid.muted = vid.volume === 0;
+        mbtn.textContent = vid.muted ? "🔇" : (vid.volume < 0.5 ? "🔉" : "🔊");
+      };
+      mbtn.onclick = () => {
+        vid.muted = !vid.muted;
+        mbtn.textContent = vid.muted ? "🔇" : "🔊";
+        if (!vid.muted && vid.volume === 0) {
+          vid.volume = 0.5;
+          vol.value = 50;
+        }
       };
 
-      audio.onended = () => { playing = false; pbtn.textContent = "▶"; pfill.style.width = "0%"; };
-      audio.onerror = () => {
-        app.innerHTML = '<div class="error-card"><div class="emoji">😵</div><div><strong>Stream Error</strong></div><p style="margin-top:0.5rem;font-size:0.85rem;color:#4b6354">Gagal memutar audio. yt-dlp mungkin belum terinstall di server.</p></div>';
+      // Fullscreen
+      fsbtn.onclick = () => {
+        if (!document.fullscreenElement) {
+          if (vbox.requestFullscreen) vbox.requestFullscreen();
+          else if (vid.webkitEnterFullscreen) vid.webkitEnterFullscreen(); // iOS / WebKit
+          else if (vbox.webkitRequestFullscreen) vbox.webkitRequestFullscreen();
+        } else {
+          if (document.exitFullscreen) document.exitFullscreen();
+        }
       };
 
-      // Auto-play
-      audio.play().then(() => { playing = true; pbtn.textContent = "⏸"; }).catch(() => {});
+      // Auto-trigger video load & play on user gesture
+      loadVideo();
+      vid.play().then(() => {
+        pbtn.textContent = "⏸";
+        bp.classList.add("hidden");
+      }).catch(() => {
+        // Autoplay blocked by browser policy, wait for tap on bp
+        sp.style.display = "none";
+        bp.classList.remove("hidden");
+        setStatus("Ketuk tombol ▶ untuk memutar video");
+      });
     }
 
-    function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
     init();
   </script>
 </body>

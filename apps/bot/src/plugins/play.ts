@@ -1,61 +1,66 @@
 import { definePlugin } from "@nibolbot/shared";
-import { searchYouTube, formatDuration } from "../lib/youtube";
+import { searchYouTube, getVideoInfo, extractVideoId, formatDuration, type YouTubeResult } from "../lib/youtube";
 import { isSpotifyUrl, resolveSpotifyTrack } from "../lib/spotify";
 import { sendInteractiveMessage, buildPlayCard, fetchThumbnailBuffer } from "../lib/interactive";
 import { createPlayerToken } from "../lib/player";
+import { getPlayerUrl } from "../lib/config";
 
 export default definePlugin({
   name: "play",
   category: "music",
-  description: "Cari dan putar musik dari YouTube via Web Player",
+  description: "Cari video/lagu dan tonton via In-App WebView WhatsApp / HTML5 Player",
   commands: ["play", "p"],
   defaults: {
     enabled: true,
-    cooldown: 10,
-    limitPerDay: 20,
-    maxDuration: 10
+    cooldown: 5,
+    limitPerDay: 50,
+    maxDuration: 60
   },
   async run({ sock, msg, from, args, reply, fullText, db, settings }) {
-    let query = fullText || args.join(" ");
+    let query = (fullText || args.join(" ")).trim();
     if (!query) {
-      await reply("❌ Tulis judul lagu atau link Spotify. Contoh: `.play Sheila On 7 Dan`");
+      await reply("❌ Masukkan judul atau link YouTube.\nContoh: `.play https://youtu.be/dQw4w9WgXcQ` atau `.play Sheila On 7 Dan`");
       return;
     }
 
-    // Resolve Spotify link if given
     if (isSpotifyUrl(query)) {
       await reply("🟢 Mendeteksi link Spotify, mencari padanan di YouTube...");
       const spotifyInfo = await resolveSpotifyTrack(query);
       if (spotifyInfo) {
         query = spotifyInfo.searchQuery;
-      } else {
-        await reply("⚠️ Gagal mengekstrak metadata Spotify, mencoba pencarian langsung...");
       }
     }
 
-    await reply("🔍 Mencari...");
+    let song: YouTubeResult | null = null;
+    const directVideoId = extractVideoId(query);
 
-    const results = await searchYouTube(query, 5);
-    if (!results.length) {
-      await reply("❌ Tidak ditemukan hasil untuk: " + query);
-      return;
+    if (directVideoId) {
+      await reply("🔍 Mengambil info video...");
+      song = await getVideoInfo(directVideoId);
+    } else {
+      await reply("🔍 Mencari video...");
+      const results = await searchYouTube(query, 5);
+      if (results.length > 0) {
+        song = results[0];
+      }
     }
 
-    const song = results[0];
+    if (!song) {
+      await reply("❌ Video tidak ditemukan: " + query);
+      return;
+    }
 
     const config = db.query("SELECT config FROM feature_settings WHERE feature = 'play'").get() as { config: string } | null;
-    const maxDur = config ? (JSON.parse(config.config).maxDuration || 10) : 10;
+    const maxDur = config ? (JSON.parse(config.config).maxDuration || 60) : 60;
     if (song.duration > maxDur * 60) {
-      await reply(`❌ Durasi ${formatDuration(song.duration)} melebihi batas ${maxDur} menit.`);
+      await reply(`❌ Durasi ${formatDuration(song.duration)} melebihi batas maksimal ${maxDur} menit.`);
       return;
     }
 
-    // Create web player token (15 min expiry)
+    // Buat token player (berlaku 15 menit)
     const token = createPlayerToken(song.id, song.title, song.channel, song.duration, song.thumbnail);
-    const apiBase = process.env.API_URL || "http://localhost:3000";
-    const webPlayerUrl = `${apiBase}/p/${token}`;
+    const playerUrl = getPlayerUrl(token);
 
-    // newsletter header
     const contextInfo = settings.newsletterJid ? {
       forwardedNewsletterMessageInfo: {
         newsletterJid: settings.newsletterJid,
@@ -65,27 +70,23 @@ export default definePlugin({
       isForwarded: true
     } : {};
 
-    // send interactive card with web player button (renders on Mobile)
+    // Kirim pesan interaktif WhatsApp dengan tombol "▶️ Play Video"
+    // WhatsApp Android & iOS membuka URL ini langsung di In-App WebView modal tanpa keluar aplikasi
     const thumb = await fetchThumbnailBuffer(song.thumbnail);
     try {
       await sendInteractiveMessage(sock, {
         to: from,
-        title: song.title,
-        body: `👤 ${song.channel}\n⏱️ ${formatDuration(song.duration)}`,
-        footer: `${settings.botName} • Klik tombol untuk putar`,
+        title: `🎬 ${song.title}`,
+        body: `🏢 ${song.channel}\n⏱️ ${formatDuration(song.duration)}`,
+        footer: `${settings.botName} • In-App Video Player`,
         thumbnail: thumb || undefined,
-        buttons: buildPlayCard(song, settings.botName, webPlayerUrl),
+        buttons: buildPlayCard(song, settings.botName, playerUrl),
         contextInfo
       });
-    } catch {}
-
-    // Companion text (accessible on WhatsApp Web / Desktop)
-    await reply(
-      `🎵 *${song.title}*\n` +
-      `👤 ${song.channel}\n` +
-      `⏱️ ${formatDuration(song.duration)}\n\n` +
-      `🎧 *Putar di Web:*\n${webPlayerUrl}\n\n` +
-      `_Download:_ \`.ytmp3 ${song.id}\` | \`.ytmp4 ${song.id}\``
-    );
+    } catch (err) {
+      console.error("Gagal mengirim kartu interaktif:", err);
+      // Fallback HANYA jika relay pesan interaktif gagal
+      await reply(`🎬 *${song.title}*\n🏢 ${song.channel}\n⏱️ ${formatDuration(song.duration)}\n\n[▶️ Play Video: ${playerUrl}]`);
+    }
   }
 });
