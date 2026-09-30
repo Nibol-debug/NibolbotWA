@@ -7,7 +7,6 @@ import makeWASocket, {
   type WASocket,
   type ConnectionState
 } from "@whiskeysockets/baileys";
-import initButtons from "buttons-warpper";
 import pino from "pino";
 import { Boom } from "@hapi/boom";
 import { existsSync, mkdirSync, rmSync, readFileSync, statSync, unlinkSync, readdirSync } from "node:fs";
@@ -92,10 +91,11 @@ async function connectToWhatsApp(phoneNumberToPair?: string) {
   });
 
   try {
-    await initButtons(sock);
-  } catch (err: any) {
-    logger.warn({ err }, "buttons-warpper initialization error");
-  }
+    const mod: any = await import("buttons-warpper" as any).catch(() => null);
+    if (mod?.default) {
+      await mod.default(sock);
+    }
+  } catch {}
 
   sock.ev.on("creds.update", saveCreds);
 

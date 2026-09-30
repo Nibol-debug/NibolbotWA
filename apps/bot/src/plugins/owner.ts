@@ -10,8 +10,12 @@ export default definePlugin({
     cooldown: 3,
     limitPerDay: 50
   },
-  async run({ reply, sender, isGroup, isOwner, settings, from }) {
+  async run({ reply, sender, isGroup, isOwner, settings, from, sock }) {
     const rawNumber = sender.split("@")[0].split(":")[0];
+    const authMe = (sock as any)?.authState?.creds?.me;
+    const botPhone = (authMe?.id || sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
+    const botLid = (authMe?.lid || (sock.user as any)?.lid || "").split(":")[0].replace(/[^0-9]/g, "");
+
     const maskedOwners = settings.owners.map(o => {
       const clean = o.trim();
       if (clean.length > 7) {
@@ -25,6 +29,8 @@ export default definePlugin({
       `• *Pengirim:* \`${sender}\`\n` +
       `• *ID / Nomor:* \`${rawNumber}\`\n` +
       `• *Status:* ${isOwner ? "✅ *OWNER TERVERIFIKASI*" : "❌ *Pengguna Biasa*"}\n` +
+      `• *Nomor Bot:* \`${botPhone ? "+" + botPhone : "-"}\`\n` +
+      `• *LID Bot:* \`${botLid || "-"}\`\n` +
       `• *Lokasi Chat:* ${isGroup ? "👥 Grup WhatsApp" : "👤 Chat Pribadi (PM)"}\n` +
       `• *Mode Bot:* ${settings.mode === "owner" ? "🔒 Khusus Owner" : "🌐 Publik"}\n` +
       `• *Akses PM:* ${settings.allowPm === false ? "🚫 Dinonaktifkan" : "✅ Aktif"}\n\n` +

@@ -74,8 +74,9 @@ export function checkIsOwner(
 ): boolean {
   if (msg.key.fromMe) return true;
 
-  const botId = sock.user?.id?.split(":")[0]?.replace(/[^0-9]/g, "");
-  const botLid = sock.user?.lid?.split(":")[0]?.replace(/[^0-9]/g, "");
+  const authMe = (sock as any).authState?.creds?.me;
+  const botId = (authMe?.id || sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
+  const botLid = (authMe?.lid || (sock.user as any)?.lid || "").split(":")[0].replace(/[^0-9]/g, "");
   const cleanSenderRaw = sender.split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
   const cleanSenderNormalized = normalizePhoneNumber(cleanSenderRaw);
 
@@ -123,13 +124,29 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
     return;
   }
 
-  // Support bot mention prefix in groups (e.g. "@bot .ping")
-  const botNumber = sock.user?.id ? sock.user.id.split(":")[0].replace(/[^0-9]/g, "") : "";
-  if (isGroup && botNumber && cleanText.startsWith(`@${botNumber}`)) {
-    cleanText = cleanText.slice(`@${botNumber}`.length).trim();
+  // Support bot mention prefix in groups (e.g. "@bot .ping" or "@151380685783137 ping")
+  const authMe = (sock as any).authState?.creds?.me;
+  const botNumber = (authMe?.id || sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
+  const botLid = (authMe?.lid || (sock.user as any)?.lid || "").split(":")[0].replace(/[^0-9]/g, "");
+
+  if (isGroup) {
+    if (botNumber && cleanText.startsWith(`@${botNumber}`)) {
+      cleanText = cleanText.slice(`@${botNumber}`.length).trim();
+    } else if (botLid && cleanText.startsWith(`@${botLid}`)) {
+      cleanText = cleanText.slice(`@${botLid}`.length).trim();
+    }
   }
 
-  if (!cleanText.startsWith(prefix)) return;
+  // If text does not start with prefix:
+  // In groups, if tagged or if command directly matches a registered plugin (e.g. "ping", "help", "owner")
+  if (!cleanText.startsWith(prefix)) {
+    const firstWord = cleanText.split(/\s+/)[0]?.toLowerCase();
+    if (firstWord && getPluginForCommand(firstWord)) {
+      cleanText = prefix + cleanText;
+    } else {
+      return;
+    }
+  }
 
   // Extract command name and args
   const bodyWithoutPrefix = cleanText.slice(prefix.length).trim();

@@ -34,9 +34,16 @@ try {
 
   // Test 4: checkIsOwner logic
   const mockSock: any = {
+    authState: {
+      creds: {
+        me: {
+          id: "6283146564122:10@s.whatsapp.net",
+          lid: "151380685783137:10@lid"
+        }
+      }
+    },
     user: {
-      id: "6283146564122:10@s.whatsapp.net",
-      lid: "151380685783137:10@lid"
+      id: "6283146564122:10@s.whatsapp.net"
     }
   };
   const testOwners = ["081234567890", "628999999999"];
