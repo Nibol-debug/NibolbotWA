@@ -74,10 +74,9 @@ Akses panel admin di browser: [http://localhost:5173](http://localhost:5173)
 
 ---
 
-## 🔐 Kredensial Default Panel
+## 🔐 Kredensial Panel Admin
 
-- **Username:** `nibol`
-- **Password:** `nibolganteng`
+Kredensial login panel admin dikonfigurasi melalui environment variable. Silakan salin `.env.example` menjadi `.env` dan tentukan nilai `ADMIN_USERNAME` serta `ADMIN_PASSWORD` dengan kata sandi yang aman.
 
 ---
 
@@ -89,6 +88,7 @@ Akses panel admin di browser: [http://localhost:5173](http://localhost:5173)
 | `.help` / `.menu` | Daftar perintah yang aktif |
 | `.status` | Informasi uptime, RAM, dan status koneksi |
 | `.play <judul/link>` | Cari lagu, kirim kartu interaktif & link Web Player |
+| `.ythtml <judul/link>` | Merekam tampilan HTML5 player WebSocket menjadi MP4 & kirim langsung ke chat WA |
 | `.yts <judul>` | Tampilkan hasil pencarian YouTube dalam format Carousel |
 | `.ytmp3 <link>` | Download audio MP3 dari YouTube |
 | `.ytmp4 <link>` | Download video MP4 (480p) dari YouTube |
