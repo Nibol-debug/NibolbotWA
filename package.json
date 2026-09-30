@@ -11,7 +11,8 @@
     "dev:panel": "cd apps/panel && bun run dev",
     "build:panel": "cd apps/panel && bun run build",
     "test:baileys": "cd apps/bot && bun test-baileys.ts",
-    "test:core": "cd apps/bot && bun test-core.ts"
+    "test:core": "cd apps/bot && bun test-core.ts",
+    "test:play": "cd apps/bot && bun test-debug-suite.ts"
   },
   "dependencies": {
     "qrcode": "^1.5.4",

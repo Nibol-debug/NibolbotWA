@@ -2,10 +2,19 @@ import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { jwt } from "@elysiajs/jwt";
 import { db } from "./db";
+import { renderGamePage } from "./games";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const port = Number(process.env.PORT) || 3000;
 const botUrl = process.env.BOT_SERVICE_URL || "http://localhost:3001";
 const internalToken = process.env.INTERNAL_TOKEN || "secret";
+
+const panelDist = [
+  join(import.meta.dir, "../../panel/dist"),
+  "/app/apps/panel/dist",
+  join(process.cwd(), "apps/panel/dist")
+].find(p => existsSync(p));
 
 // In-memory rate limiter for login (max 5 failed attempts per 60s per IP)
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
@@ -625,6 +634,8 @@ export const app = new Elysia()
             playsinline
             webkit-playsinline
             x5-playsinline
+            controls
+            autoplay
             poster="\${info.thumbnail || ''}"
             preload="metadata"
           ></video>
@@ -814,6 +825,53 @@ export const app = new Elysia()
   </script>
 </body>
 </html>`;
+  })
+  // --- Mini Games (Dino Runner / Arcade) ---
+  .get("/games", ({ set }) => {
+    set.headers["content-type"] = "text/html; charset=utf-8";
+    return renderGamePage("index");
+  })
+  .get("/games/:game", ({ params, set }) => {
+    set.headers["content-type"] = "text/html; charset=utf-8";
+    return renderGamePage(params.game);
+  })
+
+  // --- Svelte Panel SPA Static & Fallback Routing ---
+  .get("/", ({ set }) => {
+    if (panelDist && existsSync(join(panelDist, "index.html"))) {
+      set.headers["content-type"] = "text/html; charset=utf-8";
+      return readFileSync(join(panelDist, "index.html"), "utf-8");
+    }
+    return { name: "Nibolbot API", status: "running" };
+  })
+  .get("*", ({ request, set }) => {
+    const url = new URL(request.url);
+    const pathname = url.pathname;
+    if (
+      pathname.startsWith("/api/") ||
+      pathname.startsWith("/stream/") ||
+      pathname.startsWith("/p/") ||
+      pathname.startsWith("/games") ||
+      pathname.startsWith("/health")
+    ) {
+      set.status = 404;
+      return "Not Found";
+    }
+
+    if (panelDist) {
+      const filePath = join(panelDist, pathname);
+      if (existsSync(filePath) && !pathname.endsWith("/")) {
+        return Bun.file(filePath);
+      }
+      const indexPath = join(panelDist, "index.html");
+      if (existsSync(indexPath)) {
+        set.headers["content-type"] = "text/html; charset=utf-8";
+        return readFileSync(indexPath, "utf-8");
+      }
+    }
+
+    set.status = 404;
+    return "Not Found";
   })
   .listen(port);
 
