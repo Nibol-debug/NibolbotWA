@@ -19,6 +19,8 @@ export function normalizePhoneNumber(phone: string): string {
 export function extractMessageContent(msg: proto.IMessage | null | undefined): any {
   if (!msg) return null;
   let content: any = msg;
+
+  // Unwrap nested wrappers (ephemeral, viewOnce, etc.)
   while (
     content?.ephemeralMessage?.message ||
     content?.viewOnceMessage?.message ||
@@ -33,6 +35,7 @@ export function extractMessageContent(msg: proto.IMessage | null | undefined): a
       content.documentWithCaptionMessage?.message ||
       content.editedMessage?.message?.protocolMessage?.editedMessage;
   }
+
   return content;
 }
 
@@ -80,15 +83,42 @@ export function checkIsOwner(
   const cleanSenderRaw = sender.split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
   const cleanSenderNormalized = normalizePhoneNumber(cleanSenderRaw);
 
+  // Cek sender = nomor bot (via phone number)
   if (botId && (cleanSenderNormalized === normalizePhoneNumber(botId) || cleanSenderRaw === botId)) return true;
+  // Cek sender = LID bot (multi-device: HP mengirim, Web session menerima dgn fromMe=false)
   if (botLid && cleanSenderRaw === botLid) return true;
+
+  // Jika sender berformat LID, coba resolve ke nomor telepon dari participant field
+  const isLidSender = sender.includes("@lid");
+  let phoneFromSender = "";
+
+  if (isLidSender) {
+    // participant kadang masih berisi nomor telepon asli meski sender = LID
+    const participant = msg.key.participant || (msg as any).participant;
+    if (participant && !participant.includes("@lid")) {
+      phoneFromSender = participant.split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+    }
+  }
+
+  // Kumpulkan semua candidate number untuk dicocokkan dengan daftar owner
+  const candidates = [cleanSenderNormalized, cleanSenderRaw];
+  if (phoneFromSender) {
+    candidates.push(phoneFromSender, normalizePhoneNumber(phoneFromSender));
+  }
 
   return owners.some(owner => {
     const rawOwner = owner.split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
     if (!rawOwner) return false;
     const normOwner = normalizePhoneNumber(rawOwner);
-    return cleanSenderNormalized === normOwner || cleanSenderRaw === rawOwner;
+    return candidates.some(c => c === normOwner || c === rawOwner);
   });
+}
+
+function getBotJids(sock: WASocket) {
+  const authMe = (sock as any).authState?.creds?.me;
+  const botNumber = (authMe?.id || sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
+  const botLid = (authMe?.lid || (sock.user as any)?.lid || "").split(":")[0].replace(/[^0-9]/g, "");
+  return { botNumber, botLid };
 }
 
 export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessageInfo): Promise<void> {
@@ -98,7 +128,13 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
   if (!from || from === "status@broadcast") return;
 
   const isGroup = from.endsWith("@g.us");
-  const sender = isGroup ? (msg.key.participant || msg.participant || from) : from;
+  const sender = isGroup ? (msg.key.participant || (msg as any).participant || from) : from;
+
+  // === DIAGNOSA GRUP ===
+  if (isGroup) {
+    const msgKeys = msg.message ? Object.keys(msg.message) : [];
+    console.log(`[GROUP] ← pesan masuk | from=${from} sender=${sender} keys=${msgKeys.join(",")}`);
+  }
 
   // Auto-register group in database if new
   if (isGroup) {
@@ -114,36 +150,61 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
   // Extract text from unwrapped message
   const rawText = extractMessageText(msg.message);
   let cleanText = rawText.trim();
-  if (!cleanText) return;
+
+  if (isGroup) {
+    console.log(`[GROUP]   rawText="${rawText.slice(0, 80)}" cleanText="${cleanText.slice(0, 80)}"`);
+  }
+
+  if (!cleanText) {
+    if (isGroup) console.log(`[GROUP]   ✗ SKIP: teks kosong (bukan pesan teks)`);
+    return;
+  }
 
   const settings = getBotSettings();
   const prefix = settings.prefix || ".";
 
   // Prevent bot responding to its own non-command messages
   if (msg.key.fromMe && !cleanText.startsWith(prefix)) {
+    if (isGroup) console.log(`[GROUP]   ✗ SKIP: fromMe tanpa prefix`);
     return;
   }
 
-  // Support bot mention prefix in groups (e.g. "@bot .ping" or "@151380685783137 ping")
-  const authMe = (sock as any).authState?.creds?.me;
-  const botNumber = (authMe?.id || sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
-  const botLid = (authMe?.lid || (sock.user as any)?.lid || "").split(":")[0].replace(/[^0-9]/g, "");
+  // === GRUP: strip mention bot dari awal pesan ===
+  const { botNumber, botLid } = getBotJids(sock);
 
   if (isGroup) {
+    // Ambil mentionedJid dari contextInfo untuk deteksi tag bot
+    const unwrapped = extractMessageContent(msg.message);
+    const mentionedJid: string[] = unwrapped?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+    const botJidFull = (sock as any).authState?.creds?.me?.id || sock.user?.id || "";
+    const isBotMentioned =
+      mentionedJid.some(j => j === botJidFull) ||
+      (botNumber && mentionedJid.some(j => j.includes(botNumber))) ||
+      (botLid && mentionedJid.some(j => j.includes(botLid)));
+
+    // Strip @botNumber atau @botLid dari awal teks
     if (botNumber && cleanText.startsWith(`@${botNumber}`)) {
       cleanText = cleanText.slice(`@${botNumber}`.length).trim();
     } else if (botLid && cleanText.startsWith(`@${botLid}`)) {
       cleanText = cleanText.slice(`@${botLid}`.length).trim();
+    } else if (isBotMentioned && cleanText.startsWith("@")) {
+      // WhatsApp sering kirim @DisplayName bukan @nomor di teks, tapi mentionedJid berisi JID asli
+      cleanText = cleanText.replace(/^@\S+\s*/, "").trim();
+    }
+
+    if (cleanText !== rawText.trim()) {
+      console.log(`[GROUP]   mention stripped → cleanText="${cleanText.slice(0, 80)}"`);
     }
   }
 
   // If text does not start with prefix:
-  // In groups, if tagged or if command directly matches a registered plugin (e.g. "ping", "help", "owner")
+  // Match against registered plugin commands (e.g. "ping", "help", "owner")
   if (!cleanText.startsWith(prefix)) {
     const firstWord = cleanText.split(/\s+/)[0]?.toLowerCase();
     if (firstWord && getPluginForCommand(firstWord)) {
       cleanText = prefix + cleanText;
     } else {
+      if (isGroup) console.log(`[GROUP]   ✗ SKIP: tidak ada prefix "${prefix}" dan "${cleanText.split(/\s+/)[0]}" bukan command`);
       return;
     }
   }
@@ -155,16 +216,23 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
 
   const command = cmdRaw.toLowerCase();
   const plugin = getPluginForCommand(command);
-  if (!plugin) return;
+  if (!plugin) {
+    if (isGroup) console.log(`[GROUP]   ✗ SKIP: command "${command}" tidak ditemukan di plugin registry`);
+    return;
+  }
+
+  if (isGroup) console.log(`[GROUP]   ✓ command="${command}" plugin="${plugin.name}" sender="${sender}"`);
 
   // 1. Group Ban Check (PRD P5)
   if (isGroup && isGroupBanned(from)) {
+    console.log(`[GROUP]   ✗ BLOCKED: grup ${from} di-ban di database`);
     logCommand(sender, command, "BLOCKED");
     return;
   }
 
   // 2. User Blacklist Check (PRD P6)
   if (isUserBlacklisted(sender)) {
+    if (isGroup) console.log(`[GROUP]   ✗ BLOCKED: sender ${sender} di-blacklist`);
     logCommand(sender, command, "BLOCKED");
     return;
   }
@@ -172,6 +240,7 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
   // 3. Bot Mode Check (PRD P3: 'public' vs 'owner')
   const isOwner = checkIsOwner(sender, msg, sock, settings.owners);
   if (settings.mode === "owner" && !isOwner) {
+    if (isGroup) console.log(`[GROUP]   ✗ BLOCKED: mode=owner, sender bukan owner`);
     logCommand(sender, command, "BLOCKED");
     await sock.sendMessage(from, { text: "🔒 Bot sedang dalam mode khusus Owner." }, { quoted: msg });
     return;
@@ -190,6 +259,7 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
 
   // 4. Feature Toggle Check (PRD P4)
   if (!isFeatureEnabled(plugin.name)) {
+    if (isGroup) console.log(`[GROUP]   ✗ BLOCKED: fitur "${plugin.name}" dinonaktifkan`);
     logCommand(sender, command, "BLOCKED");
     await sock.sendMessage(from, { text: `⚠️ Fitur *${plugin.name}* sedang dinonaktifkan oleh admin.` }, { quoted: msg });
     return;
@@ -217,6 +287,8 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
 
     cooldowns.set(cooldownKey, now + cooldownDuration);
   }
+
+  if (isGroup) console.log(`[GROUP]   → EXECUTING plugin "${plugin.name}"...`);
 
   // 6. Context Preparation & Reply Helper (with optional Newsletter Header B9)
   const reply = async (content: string | proto.AnyMessageContent) => {
@@ -247,9 +319,15 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
 
     try {
       return await sock.sendMessage(from, payload, { quoted: msg });
-    } catch {
+    } catch (sendErr) {
       // Fallback: send without quoted message if quote context fails in group
-      return await sock.sendMessage(from, payload);
+      if (isGroup) console.log(`[GROUP]   ⚠ reply quoted gagal, fallback tanpa quote:`, (sendErr as any)?.message);
+      try {
+        return await sock.sendMessage(from, payload);
+      } catch (fallbackErr) {
+        if (isGroup) console.error(`[GROUP]   ✗ reply fallback juga gagal:`, (fallbackErr as any)?.message);
+        throw fallbackErr;
+      }
     }
   };
 
@@ -272,6 +350,7 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
   try {
     await plugin.run(ctx);
     logCommand(sender, command, "SUCCESS");
+    if (isGroup) console.log(`[GROUP]   ✓ SUCCESS command="${command}"`);
   } catch (err: any) {
     console.error(`❌ Error executing command [${command}]:`, err);
     logCommand(sender, command, "FAILED");

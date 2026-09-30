@@ -197,9 +197,20 @@ async function connectToWhatsApp(phoneNumberToPair?: string) {
 
   // Message handler
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify" || !sock) return;
+    if (!sock) return;
+
     for (const msg of messages) {
-      await handleIncomingMessage(sock, msg);
+      const jid = msg.key.remoteJid || "";
+
+      // Log untuk diagnosa: apakah pesan grup masuk sama sekali?
+      if (jid.endsWith("@g.us")) {
+        console.log(`[UPSERT] type="${type}" from=${jid} fromMe=${msg.key.fromMe} hasMsg=${!!msg.message}`);
+      }
+
+      // Proses hanya pesan baru (notify), BUKAN history sync (append)
+      if (type === "notify") {
+        await handleIncomingMessage(sock, msg);
+      }
     }
   });
 
