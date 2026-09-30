@@ -12,43 +12,74 @@ export async function searchYouTube(query: string, limit = 5): Promise<YouTubeRe
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       "Accept-Language": "id-ID,id;q=0.9,en;q=0.8"
-    }
+    },
+    signal: AbortSignal.timeout(10000)
   });
+
+  if (!res.ok) {
+    throw new Error(`YouTube search returned HTTP ${res.status}: ${res.statusText}`);
+  }
 
   const html = await res.text();
 
-  // ytInitialData contains all search results as JSON
-  const match = html.match(/var ytInitialData\s*=\s*({.+?});\s*<\/script>/);
-  if (!match) return [];
+  // Extract ytInitialData from HTML
+  let jsonStr: string | null = null;
+  const match = html.match(/(?:var\s+ytInitialData|window\["ytInitialData"\]|ytInitialData)\s*=\s*({.+?});\s*(?:var\s|<\/script>)/s)
+    || html.match(/var ytInitialData\s*=\s*({.+?});/s);
+
+  if (match) {
+    jsonStr = match[1];
+  } else {
+    const idx = html.indexOf("ytInitialData = ");
+    if (idx !== -1) {
+      const start = html.indexOf("{", idx);
+      const end = html.indexOf(";</script>", start);
+      if (start !== -1 && end !== -1) {
+        jsonStr = html.substring(start, end);
+      }
+    }
+  }
+
+  if (!jsonStr) {
+    throw new Error("ytInitialData tidak ditemukan dalam response YouTube");
+  }
 
   try {
-    const data = JSON.parse(match[1]);
-    const contents = data
+    const data = JSON.parse(jsonStr);
+    const sections = data
       ?.contents
       ?.twoColumnSearchResultsRenderer
       ?.primaryContents
       ?.sectionListRenderer
-      ?.contents?.[0]
-      ?.itemSectionRenderer
       ?.contents || [];
 
     const results: YouTubeResult[] = [];
-    for (const item of contents) {
-      if (results.length >= limit) break;
-      const v = item?.videoRenderer;
-      if (!v?.videoId) continue;
+    for (const section of sections) {
+      const contents = section?.itemSectionRenderer?.contents || [];
+      for (const item of contents) {
+        if (results.length >= limit) break;
+        const v = item?.videoRenderer || item?.compactVideoRenderer;
+        if (!v?.videoId) continue;
 
-      results.push({
-        id: v.videoId,
-        title: v.title?.runs?.[0]?.text || "",
-        duration: parseDuration(v.lengthText?.simpleText || "0:00"),
-        thumbnail: v.thumbnail?.thumbnails?.pop()?.url || "",
-        channel: v.ownerText?.runs?.[0]?.text || ""
-      });
+        const thumbList = v.thumbnail?.thumbnails || [];
+        const thumbnail = thumbList.length > 0 ? thumbList[thumbList.length - 1].url : "";
+        const title = v.title?.runs?.[0]?.text || v.title?.simpleText || "";
+        const channel = v.ownerText?.runs?.[0]?.text || v.shortBylineText?.runs?.[0]?.text || "";
+        const duration = parseDuration(v.lengthText?.simpleText || "");
+
+        results.push({
+          id: v.videoId,
+          title,
+          duration,
+          thumbnail,
+          channel
+        });
+      }
+      if (results.length >= limit) break;
     }
     return results;
-  } catch {
-    return [];
+  } catch (err: any) {
+    throw new Error(`Gagal mem-parsing data pencarian YouTube: ${err?.message || err}`);
   }
 }
 
@@ -60,11 +91,18 @@ export async function getVideoInfo(urlOrId: string): Promise<YouTubeResult | nul
   const res = await fetch(url, {
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+    },
+    signal: AbortSignal.timeout(10000)
   });
+
+  if (!res.ok) {
+    throw new Error(`YouTube video HTTP ${res.status}: ${res.statusText}`);
+  }
+
   const html = await res.text();
 
-  const match = html.match(/var ytInitialPlayerResponse\s*=\s*({.+?});\s*(?:var|<\/script>)/);
+  const match = html.match(/var ytInitialPlayerResponse\s*=\s*({.+?});\s*(?:var|<\/script>)/s)
+    || html.match(/ytInitialPlayerResponse\s*=\s*({.+?});/s);
   if (!match) return null;
 
   try {
@@ -72,11 +110,12 @@ export async function getVideoInfo(urlOrId: string): Promise<YouTubeResult | nul
     const details = data?.videoDetails;
     if (!details) return null;
 
+    const thumbList = details.thumbnail?.thumbnails || [];
     return {
       id: videoId,
       title: details.title || "Unknown",
       duration: Number(details.lengthSeconds) || 0,
-      thumbnail: details.thumbnail?.thumbnails?.pop()?.url || "",
+      thumbnail: thumbList.length > 0 ? thumbList[thumbList.length - 1].url : "",
       channel: details.author || ""
     };
   } catch {
@@ -93,15 +132,21 @@ export function extractVideoId(input: string): string | null {
 }
 
 function parseDuration(text: string): number {
-  const parts = text.split(":").map(Number);
+  if (!text) return 0;
+  const parts = text.split(/[:.]/).map(Number);
   if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
   if (parts.length === 2) return parts[0] * 60 + parts[1];
   return parts[0] || 0;
 }
 
 export function formatDuration(sec: number): string {
-  const m = Math.floor(sec / 60);
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
+  if (h > 0) {
+    return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+  }
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 

@@ -30,15 +30,20 @@ export async function sendInteractiveMessage(sock: WASocket, opts: SendInteracti
 
     if (opts.thumbnail) {
       try {
-        const media = await prepareWAMessageMedia(
+        const uploadPromise = prepareWAMessageMedia(
           { image: opts.thumbnail },
           { upload: sock.waUploadToServer }
         );
-        if (media.imageMessage) {
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Thumbnail upload timeout")), 5000)
+        );
+        const media = await Promise.race([uploadPromise, timeoutPromise]);
+        if (media?.imageMessage) {
           header.hasMediaAttachment = true;
           header.imageMessage = media.imageMessage;
         }
-      } catch {
+      } catch (err: any) {
+        console.warn("[INTERACTIVE] Thumbnail upload skipped/failed:", err?.message || err);
         header = { title: opts.title || "", hasMediaAttachment: false };
       }
     }
@@ -58,7 +63,7 @@ export async function sendInteractiveMessage(sock: WASocket, opts: SendInteracti
     }
   };
 
-  const useVO = opts.useViewOnce !== false;
+  const useVO = opts.useViewOnce === true;
   const messageContent: proto.IMessage = useVO
     ? {
         viewOnceMessage: {
@@ -167,8 +172,9 @@ export async function sendCarouselMessage(
 }
 
 export async function fetchThumbnailBuffer(url: string): Promise<Buffer | null> {
+  if (!url) return null;
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return null;
     return Buffer.from(await res.arrayBuffer());
   } catch {

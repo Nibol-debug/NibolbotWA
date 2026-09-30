@@ -23,11 +23,19 @@ export default definePlugin({
       return;
     }
 
+    console.log(`[PLAY] query received: "${query}"`);
+
+    // Handle Spotify link if applicable
     if (isSpotifyUrl(query)) {
-      await reply("🟢 Mendeteksi link Spotify, mencari padanan di YouTube...");
-      const spotifyInfo = await resolveSpotifyTrack(query);
-      if (spotifyInfo) {
-        query = spotifyInfo.searchQuery;
+      try {
+        await reply("🟢 Mendeteksi link Spotify, mencari padanan di YouTube...");
+        const spotifyInfo = await resolveSpotifyTrack(query);
+        if (spotifyInfo) {
+          query = spotifyInfo.searchQuery;
+          console.log(`[PLAY] resolved Spotify query: "${query}"`);
+        }
+      } catch (err: any) {
+        console.error("[PLAY] Spotify resolve error:", err);
       }
     }
 
@@ -35,31 +43,93 @@ export default definePlugin({
     const directVideoId = extractVideoId(query);
 
     if (directVideoId) {
-      await reply("🔍 Mengambil info video...");
-      song = await getVideoInfo(directVideoId);
+      console.log(`[PLAY] direct video ID: ${directVideoId}`);
+      try {
+        await reply("🔍 Mengambil info video...");
+      } catch (err) {
+        console.warn("[PLAY] failed to send info status reply:", err);
+      }
+
+      console.log(`[PLAY] fetching video metadata for ${directVideoId}...`);
+      try {
+        song = await getVideoInfo(directVideoId);
+        if (!song) {
+          await reply(`❌ Metadata video tidak ditemukan untuk ID: ${directVideoId}`);
+          return;
+        }
+      } catch (err: any) {
+        console.error("[PLAY] getVideoInfo failed:", err);
+        await reply(`❌ Gagal mengambil metadata video.\nError: ${err?.message || "Unknown error"}`);
+        return;
+      }
     } else {
-      await reply("🔍 Mencari video...");
-      const results = await searchYouTube(query, 5);
+      try {
+        await reply("🔍 Mencari video...");
+      } catch (err) {
+        console.warn("[PLAY] failed to send search status reply:", err);
+      }
+
+      console.log("[PLAY] searching YouTube...");
+      let results: YouTubeResult[] = [];
+      try {
+        results = await searchYouTube(query, 5);
+      } catch (err: any) {
+        console.error("[PLAY] searchYouTube failed:", err);
+        await reply(`❌ Gagal mencari video.\nError: ${err?.message || "Unknown error"}`);
+        return;
+      }
+
+      console.log(`[PLAY] search result received (${results.length} found)`);
+
       if (results.length > 0) {
         song = results[0];
       }
     }
 
     if (!song) {
+      console.log("[PLAY] no video found for query:", query);
       await reply("❌ Video tidak ditemukan: " + query);
       return;
     }
 
-    const config = db.query("SELECT config FROM feature_settings WHERE feature = 'play'").get() as { config: string } | null;
-    const maxDur = config ? (JSON.parse(config.config).maxDuration || 60) : 60;
-    if (song.duration > maxDur * 60) {
-      await reply(`❌ Durasi ${formatDuration(song.duration)} melebihi batas maksimal ${maxDur} menit.`);
-      return;
+    console.log(`[PLAY] video ID: ${song.id}`);
+    console.log(`[PLAY] title: ${song.title}`);
+    console.log(`[PLAY] channel: ${song.channel}`);
+    console.log(`[PLAY] duration: ${formatDuration(song.duration)} (${song.duration}s)`);
+
+    // Check max duration
+    try {
+      const config = db.query("SELECT config FROM feature_settings WHERE feature = 'play'").get() as { config: string } | null;
+      const maxDur = config ? (JSON.parse(config.config).maxDuration || 60) : 60;
+      if (song.duration > maxDur * 60) {
+        await reply(`❌ Durasi ${formatDuration(song.duration)} melebihi batas maksimal ${maxDur} menit.`);
+        return;
+      }
+    } catch (err: any) {
+      console.warn("[PLAY] duration check skipped due to config error:", err?.message);
     }
 
     // Buat token player (berlaku 15 menit)
-    const token = createPlayerToken(song.id, song.title, song.channel, song.duration, song.thumbnail);
-    const playerUrl = getPlayerUrl(token);
+    let playerUrl = "";
+    try {
+      const token = createPlayerToken(song.id, song.title, song.channel, song.duration, song.thumbnail);
+      playerUrl = getPlayerUrl(token);
+      console.log(`[PLAY] player URL: ${playerUrl}`);
+    } catch (err: any) {
+      console.error("[PLAY] createPlayerToken / getPlayerUrl failed:", err);
+      await reply(`❌ Gagal membuat token player.\nError: ${err?.message || "Unknown error"}`);
+      return;
+    }
+
+    console.log("[PLAY] building interactive card...");
+    let buttons: any[] = [];
+    try {
+      buttons = buildPlayCard(song, settings.botName, playerUrl);
+    } catch (err: any) {
+      console.error("[PLAY] buildPlayCard failed:", err);
+      await reply(`❌ Gagal membuat kartu player.\nError: ${err?.message || "Unknown error"}`);
+      return;
+    }
 
     const contextInfo = settings.newsletterJid ? {
       forwardedNewsletterMessageInfo: {
@@ -70,9 +140,15 @@ export default definePlugin({
       isForwarded: true
     } : {};
 
-    // Kirim pesan interaktif WhatsApp dengan tombol "▶️ Play Video"
-    // WhatsApp Android & iOS membuka URL ini langsung di In-App WebView modal tanpa keluar aplikasi
-    const thumb = await fetchThumbnailBuffer(song.thumbnail);
+    // Fetch thumbnail buffer non-blocking (opsional untuk kartu interaktif)
+    let thumb: Buffer | null = null;
+    try {
+      thumb = await fetchThumbnailBuffer(song.thumbnail);
+    } catch (err) {
+      console.warn("[PLAY] fetchThumbnailBuffer failed (non-critical):", err);
+    }
+
+    console.log("[PLAY] sending interactive message...");
     try {
       await sendInteractiveMessage(sock, {
         to: from,
@@ -80,13 +156,18 @@ export default definePlugin({
         body: `🏢 ${song.channel}\n⏱️ ${formatDuration(song.duration)}`,
         footer: `${settings.botName} • In-App Video Player`,
         thumbnail: thumb || undefined,
-        buttons: buildPlayCard(song, settings.botName, playerUrl),
-        contextInfo
+        buttons,
+        contextInfo,
+        useViewOnce: false
       });
-    } catch (err) {
-      console.error("Gagal mengirim kartu interaktif:", err);
-      // Fallback HANYA jika relay pesan interaktif gagal
-      await reply(`🎬 *${song.title}*\n🏢 ${song.channel}\n⏱️ ${formatDuration(song.duration)}\n\n[▶️ Play Video: ${playerUrl}]`);
+      console.log("[PLAY] interactive message sent");
+    } catch (err: any) {
+      console.error("[PLAY] sendInteractiveMessage failed:", err);
+      try {
+        await reply(`❌ Gagal mengirim pesan interaktif.\nError: ${err?.message || "Unknown error"}\n\n🎬 *${song.title}*\n🏢 ${song.channel}\n⏱️ ${formatDuration(song.duration)}\n\n[▶️ Play Video: ${playerUrl}]`);
+      } catch (fallbackErr) {
+        console.error("[PLAY] fallback reply failed:", fallbackErr);
+      }
     }
   }
 });
