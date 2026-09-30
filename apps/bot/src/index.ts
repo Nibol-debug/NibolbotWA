@@ -14,6 +14,7 @@ import { resolve, join } from "node:path";
 import { execSync } from "node:child_process";
 import { loadPlugins } from "./plugin-loader";
 import { handleIncomingMessage } from "./command-handler";
+import { storeMessage, getCachedMessage } from "./lib/message-store";
 import { scheduleCacheCleanup, getCacheSize } from "./lib/cache";
 import { createPlayerToken, getPlayerToken } from "./lib/player";
 import { getVideoInfo } from "./lib/youtube";
@@ -87,7 +88,14 @@ async function connectToWhatsApp(phoneNumberToPair?: string) {
     retryRequestDelayMs: 2_000,
     maxMsgRetryCount: 5,
     fireInitQueries: true,
-    getMessage: async () => undefined
+    getMessage: async (key) => {
+      if (!key?.id) return undefined;
+      return getCachedMessage(key.id);
+    },
+    patchMessageBeforeSending: async (msg) => {
+      await sock?.uploadPreKeysToServerIfRequired();
+      return msg;
+    }
   });
 
   try {
@@ -200,6 +208,10 @@ async function connectToWhatsApp(phoneNumberToPair?: string) {
     if (!sock) return;
 
     for (const msg of messages) {
+      if (msg.key?.id && msg.message) {
+        storeMessage(msg.key.id, msg.message);
+      }
+
       const jid = msg.key.remoteJid || "";
 
       // Log untuk diagnosa: apakah pesan grup masuk sama sekali?
@@ -210,6 +222,14 @@ async function connectToWhatsApp(phoneNumberToPair?: string) {
       // Proses hanya pesan baru (notify), BUKAN history sync (append)
       if (type === "notify") {
         await handleIncomingMessage(sock, msg);
+      }
+    }
+  });
+
+  sock.ev.on("messages.update", (updates) => {
+    for (const { key, update } of updates) {
+      if (key?.id && update?.message) {
+        storeMessage(key.id, update.message);
       }
     }
   });

@@ -1,6 +1,7 @@
 import type { WASocket, proto } from "@whiskeysockets/baileys";
 import { db, getBotSettings, isUserBlacklisted, isGroupBanned, logCommand, logError } from "./db";
 import { getPluginForCommand, isFeatureEnabled, getFeatureConfig } from "./plugin-loader";
+import { storeMessage } from "./lib/message-store";
 import type { PluginContext } from "@nibolbot/shared";
 
 // In-memory cooldown tracker: key -> timestamp expiry in ms
@@ -318,12 +319,20 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
     }
 
     try {
-      return await sock.sendMessage(from, payload, { quoted: msg });
+      const res = await sock.sendMessage(from, payload, { quoted: msg });
+      if (res?.key?.id && res.message) {
+        storeMessage(res.key.id, res.message);
+      }
+      return res;
     } catch (sendErr) {
       // Fallback: send without quoted message if quote context fails in group
       if (isGroup) console.log(`[GROUP]   ⚠ reply quoted gagal, fallback tanpa quote:`, (sendErr as any)?.message);
       try {
-        return await sock.sendMessage(from, payload);
+        const res = await sock.sendMessage(from, payload);
+        if (res?.key?.id && res.message) {
+          storeMessage(res.key.id, res.message);
+        }
+        return res;
       } catch (fallbackErr) {
         if (isGroup) console.error(`[GROUP]   ✗ reply fallback juga gagal:`, (fallbackErr as any)?.message);
         throw fallbackErr;
