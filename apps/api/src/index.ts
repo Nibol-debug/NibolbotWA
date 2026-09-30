@@ -113,6 +113,47 @@ export const app = new Elysia()
     }
     return { authenticated: true, user: payload };
   })
+  .post("/api/auth/change-password", async ({ body, headers, jwt, set }) => {
+    const auth = headers["authorization"];
+    if (!auth || !auth.startsWith("Bearer ")) {
+      set.status = 401;
+      return { success: false, message: "Unauthorized" };
+    }
+    const token = auth.slice(7);
+    const payload = (await jwt.verify(token)) as { sub?: string } | null;
+    if (!payload || !payload.sub) {
+      set.status = 401;
+      return { success: false, message: "Token tidak valid" };
+    }
+    const username = payload.sub;
+    const { oldPassword, newPassword } = body as { oldPassword: string; newPassword: string };
+
+    const admin = db.query("SELECT * FROM admin WHERE username = ?").get(username) as any;
+    if (!admin) {
+      set.status = 404;
+      return { success: false, message: "Admin tidak ditemukan" };
+    }
+
+    const valid = await Bun.password.verify(oldPassword, admin.password_hash);
+    if (!valid) {
+      set.status = 400;
+      return { success: false, message: "Kata sandi lama salah" };
+    }
+
+    if (!newPassword || newPassword.length < 6) {
+      set.status = 400;
+      return { success: false, message: "Kata sandi baru minimal 6 karakter" };
+    }
+
+    const newHash = await Bun.password.hash(newPassword);
+    db.run("UPDATE admin SET password_hash = ? WHERE username = ?", [newHash, username]);
+    return { success: true, message: "Kata sandi berhasil diubah" };
+  }, {
+    body: t.Object({
+      oldPassword: t.String(),
+      newPassword: t.String()
+    })
+  })
 
   // --- Bot Management (PRD P2) ---
   .get("/api/bot/status", async () => {
@@ -234,6 +275,10 @@ export const app = new Elysia()
       config: t.Optional(t.Any())
     })
   })
+  .delete("/api/groups/:jid", ({ params }) => {
+    db.run("DELETE FROM groups WHERE jid = ?", [params.jid]);
+    return { success: true };
+  })
 
   // --- Blacklist (PRD P6) ---
   .get("/api/users/blacklist", () => {
@@ -274,6 +319,15 @@ export const app = new Elysia()
   })
 
   // --- Cache (PRD P9) ---
+  .get("/api/cache/info", async () => {
+    try {
+      const res = await fetch(`${botUrl}/cache/info`, {
+        headers: { "x-internal-token": internalToken }
+      });
+      if (res.ok) return await res.json();
+    } catch {}
+    return { sizeBytes: 0, sizeMb: 0 };
+  })
   .post("/api/cache/clear", async () => {
     try {
       await fetch(`${botUrl}/cache/clear`, {

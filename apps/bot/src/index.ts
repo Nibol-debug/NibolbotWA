@@ -14,7 +14,7 @@ import { resolve, join } from "node:path";
 import { execSync } from "node:child_process";
 import { loadPlugins } from "./plugin-loader";
 import { handleIncomingMessage } from "./command-handler";
-import { scheduleCacheCleanup } from "./lib/cache";
+import { scheduleCacheCleanup, getCacheSize } from "./lib/cache";
 import { createPlayerToken, getPlayerToken } from "./lib/player";
 import { getVideoInfo } from "./lib/youtube";
 import { getVideoStreamUrl, invalidateStreamCache } from "./lib/stream";
@@ -218,6 +218,14 @@ Bun.serve({
       rmSync(cacheDir, { recursive: true, force: true });
       mkdirSync(cacheDir, { recursive: true });
       return Response.json({ success: true, message: "Cache directory cleared" });
+    }
+
+    if (url.pathname === "/cache/info") {
+      const bytes = getCacheSize();
+      return Response.json({
+        sizeBytes: bytes,
+        sizeMb: +(bytes / (1024 * 1024)).toFixed(2)
+      });
     }
 
     if (url.pathname === "/player-token" && req.method === "POST") {

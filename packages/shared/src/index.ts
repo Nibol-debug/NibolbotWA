@@ -10,6 +10,7 @@ export interface BotSettings {
   stickerAuthor: string;
   newsletterJid?: string;
   channelName?: string;
+  allowPm?: boolean;
 }
 
 export interface FeatureDefaults {

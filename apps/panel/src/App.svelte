@@ -64,6 +64,7 @@
     await fetchBlacklist();
     await fetchLogs();
     await fetchStats();
+    await fetchCacheInfo();
   }
 
   async function fetchSettings() {
@@ -79,6 +80,7 @@
       if (s.sticker_author) settings.stickerAuthor = s.sticker_author;
       if (s.newsletter_jid) settings.newsletterJid = s.newsletter_jid;
       if (s.channel_name) settings.channelName = s.channel_name;
+      if (s.allow_pm !== undefined) settings.allowPm = s.allow_pm;
       if (s.cache_ttl_minutes) cacheTtl = Number(s.cache_ttl_minutes);
       if (s.cache_max_mb) maxCacheLimit = Number(s.cache_max_mb);
     } catch { /* API offline */ }
@@ -264,7 +266,8 @@
     stickerPack: 'nibolbot.my.id',
     stickerAuthor: 'by @nibol',
     newsletterJid: '120363023456789@newsletter',
-    channelName: 'Nibolbot Updates'
+    channelName: 'Nibolbot Updates',
+    allowPm: true
   });
 
   // P4: Features State
@@ -278,7 +281,11 @@
 
   async function addBlacklist() {
     if (!blacklistInput.trim()) return;
-    const cleanJid = blacklistInput.includes('@') ? blacklistInput.trim() : `${blacklistInput.trim()}@s.whatsapp.net`;
+    let clean = blacklistInput.trim().replace(/[^0-9@a-z\.]/gi, '');
+    if (clean.startsWith('08')) {
+      clean = '628' + clean.slice(2);
+    }
+    const cleanJid = clean.includes('@') ? clean : `${clean}@s.whatsapp.net`;
     try {
       await fetch(`${API}/api/users/blacklist`, {
         method: 'POST',
@@ -287,7 +294,7 @@
       });
       blacklistedUsers = [...blacklistedUsers, { jid: cleanJid, reason: 'Manual blacklist', date: '' }];
       blacklistInput = '';
-      showToast('Nomor berhasil diblokir');
+      showToast(`Nomor ${cleanJid.split('@')[0]} berhasil diblokir`);
     } catch {
       showToast('❌ Gagal menambah blacklist');
     }
@@ -331,6 +338,7 @@
           sticker_author: settings.stickerAuthor,
           newsletter_jid: settings.newsletterJid,
           channel_name: settings.channelName,
+          allow_pm: settings.allowPm,
           cache_ttl_minutes: cacheTtl,
           cache_max_mb: maxCacheLimit
         })
@@ -365,6 +373,112 @@
     }
   }
 
+  let editingGroup = $state<any | null>(null);
+
+  function startEditGroup(grp: any) {
+    editingGroup = { ...grp };
+  }
+
+  function cancelEditGroup() {
+    editingGroup = null;
+  }
+
+  async function handleSaveGroupSettings() {
+    if (!editingGroup) return;
+    try {
+      await fetch(`${API}/api/groups/${encodeURIComponent(editingGroup.jid)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editingGroup.name,
+          banned: !editingGroup.enabled,
+          config: {
+            cooldown: Number(editingGroup.cooldown) || 15,
+            welcome: !!editingGroup.welcome,
+            welcomeMsg: editingGroup.welcomeMsg || "Halo @user, selamat datang!"
+          }
+        })
+      });
+      const idx = groups.findIndex(g => g.jid === editingGroup.jid);
+      if (idx !== -1) {
+        groups[idx] = { ...editingGroup };
+      }
+      showToast(`✅ Pengaturan grup ${editingGroup.name} berhasil disimpan!`);
+      editingGroup = null;
+    } catch {
+      showToast('❌ Gagal menyimpan pengaturan grup');
+    }
+  }
+
+  async function handleDeleteGroup(jid: string) {
+    if (!confirm('Yakin ingin menghapus grup ini dari database bot?')) return;
+    try {
+      await fetch(`${API}/api/groups/${encodeURIComponent(jid)}`, { method: 'DELETE' });
+      groups = groups.filter(g => g.jid !== jid);
+      if (editingGroup?.jid === jid) editingGroup = null;
+      showToast('Grup berhasil dihapus dari daftar');
+    } catch {
+      showToast('❌ Gagal menghapus grup');
+    }
+  }
+
+  // Admin Change Password State
+  let oldPass = $state('');
+  let newPass = $state('');
+  let confirmPass = $state('');
+  let isChangingPass = $state(false);
+
+  async function handleChangePassword() {
+    if (!oldPass || !newPass) {
+      showToast('❌ Harap isi kata sandi lama dan baru');
+      return;
+    }
+    if (newPass !== confirmPass) {
+      showToast('❌ Konfirmasi kata sandi baru tidak cocok');
+      return;
+    }
+    if (newPass.length < 6) {
+      showToast('❌ Kata sandi baru minimal 6 karakter');
+      return;
+    }
+
+    isChangingPass = true;
+    try {
+      const token = localStorage.getItem('nibol_token');
+      const res = await fetch(`${API}/api/auth/change-password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ oldPassword: oldPass, newPassword: newPass })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('✅ Kata sandi admin berhasil diubah!');
+        oldPass = '';
+        newPass = '';
+        confirmPass = '';
+      } else {
+        showToast(`❌ ${data.message || 'Gagal mengubah kata sandi'}`);
+      }
+    } catch {
+      showToast('❌ Terjadi kesalahan jaringan');
+    } finally {
+      isChangingPass = false;
+    }
+  }
+
+  async function fetchCacheInfo() {
+    try {
+      const res = await fetch(`${API}/api/cache/info`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.sizeMb !== undefined) cacheSize = data.sizeMb;
+      }
+    } catch {}
+  }
+
   async function handleToggleGroup(grp: any) {
     const newStatus = !grp.enabled;
     try {
@@ -392,6 +506,7 @@
     try {
       await fetch(`${API}/api/cache/clear`, { method: 'POST' });
       cacheSize = 0;
+      await fetchCacheInfo();
       showToast('🗑️ Cache berhasil dibersihkan!');
     } catch {
       showToast('❌ Gagal membersihkan cache');
@@ -769,6 +884,26 @@
               </div>
 
               <div class="form-group full-width">
+                <span class="input-label">Akses Chat Pribadi (PM / Jalur Pribadi):</span>
+                <div class="mode-selector">
+                  <label class="mode-card {settings.allowPm ? 'selected' : ''}">
+                    <input type="radio" bind:group={settings.allowPm} value={true} />
+                    <div>
+                      <strong>💬 Izinkan Chat Pribadi & Grup</strong>
+                      <p>Semua pengguna dapat menggunakan bot lewat pesan pribadi (PM) maupun grup.</p>
+                    </div>
+                  </label>
+                  <label class="mode-card {!settings.allowPm ? 'selected' : ''}">
+                    <input type="radio" bind:group={settings.allowPm} value={false} />
+                    <div>
+                      <strong>👥 Khusus Grup Saja (Tolak PM)</strong>
+                      <p>Pengguna biasa tidak bisa menggunakan bot lewat chat pribadi. Bot hanya merespon di dalam grup (kecuali Owner).</p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div class="form-group full-width">
                 <label for="owner-list" class="input-label">Daftar Nomor Owner (Satu nomor per baris):</label>
                 <textarea id="owner-list" class="nb-textarea" rows="3" bind:value={settings.owners}></textarea>
                 <small class="helper-text">Nomor owner memiliki akses bypass limit dan pengaturan bot.</small>
@@ -793,6 +928,37 @@
               <div class="form-group">
                 <label for="channel-name" class="input-label">Nama Saluran WhatsApp:</label>
                 <input id="channel-name" type="text" class="nb-input" bind:value={settings.channelName} />
+              </div>
+            </div>
+          </div>
+
+          <!-- Card Ubah Password Admin -->
+          <div class="nb-card form-card mt-4">
+            <div class="card-title-row">
+              <h3>🔐 Ubah Kata Sandi Admin Panel</h3>
+            </div>
+            <p class="section-desc mb-3">Ganti kata sandi login panel untuk menjaga keamanan akses administrator.</p>
+
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="old-pass" class="input-label">Kata Sandi Lama:</label>
+                <input id="old-pass" type="password" class="nb-input" bind:value={oldPass} placeholder="Masukkan kata sandi lama" />
+              </div>
+
+              <div class="form-group">
+                <label for="new-pass" class="input-label">Kata Sandi Baru:</label>
+                <input id="new-pass" type="password" class="nb-input" bind:value={newPass} placeholder="Minimal 6 karakter" />
+              </div>
+
+              <div class="form-group">
+                <label for="confirm-pass" class="input-label">Konfirmasi Kata Sandi Baru:</label>
+                <input id="confirm-pass" type="password" class="nb-input" bind:value={confirmPass} placeholder="Ulangi kata sandi baru" />
+              </div>
+
+              <div class="form-group" style="display:flex;align-items:flex-end">
+                <button class="nb-btn nb-btn-primary" onclick={handleChangePassword} disabled={isChangingPass}>
+                  {isChangingPass ? 'Menyimpan...' : '🔐 Perbarui Kata Sandi'}
+                </button>
               </div>
             </div>
           </div>
@@ -909,12 +1075,26 @@
                         </td>
                         <td>{grp.cooldown} detik</td>
                         <td>{grp.welcome ? '✅ Nyala' : '❌ Mati'}</td>
-                        <td>
+                        <td style="display:flex;gap:6px;flex-wrap:wrap">
+                          <button
+                            class="nb-btn nb-btn-primary table-btn"
+                            onclick={() => startEditGroup(grp)}
+                            title="Edit pengaturan grup & welcome"
+                          >
+                            ⚙️ Edit
+                          </button>
                           <button
                             class="nb-btn nb-btn-light table-btn"
                             onclick={() => handleToggleGroup(grp)}
                           >
-                            {grp.enabled ? 'Nonaktifkan' : 'Aktifkan'}
+                            {grp.enabled ? 'Blokir' : 'Buka'}
+                          </button>
+                          <button
+                            class="nb-btn nb-btn-danger table-btn"
+                            onclick={() => handleDeleteGroup(grp.jid)}
+                            title="Hapus grup dari database"
+                          >
+                            🗑️
                           </button>
                         </td>
                       </tr>
@@ -924,6 +1104,56 @@
               </table>
             </div>
           </div>
+
+          {#if editingGroup}
+            <div class="nb-card mb-4" style="border: 3px solid var(--green-primary); background: #f0fdf4;">
+              <div class="card-title-row">
+                <h3>⚙️ Pengaturan Grup: {editingGroup.name}</h3>
+                <button class="nb-btn nb-btn-light table-btn" onclick={cancelEditGroup}>✕ Tutup</button>
+              </div>
+              <p class="section-desc mb-3">Atur pesan sambutan (welcome message), cooldown perintah, dan status bot untuk grup ini.</p>
+
+              <div class="form-grid">
+                <div class="form-group">
+                  <label for="grp-name-input" class="input-label">Nama Grup:</label>
+                  <input id="grp-name-input" type="text" class="nb-input" bind:value={editingGroup.name} />
+                </div>
+
+                <div class="form-group">
+                  <label for="grp-cd-input" class="input-label">Cooldown Antara Perintah (detik):</label>
+                  <input id="grp-cd-input" type="number" min="0" max="300" class="nb-input" bind:value={editingGroup.cooldown} />
+                  <small class="helper-text">Mencegah spam perintah dari anggota grup.</small>
+                </div>
+
+                <div class="form-group full-width">
+                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                    <input type="checkbox" id="welcome-toggle" style="width:20px;height:20px;accent-color:var(--green-primary)" bind:checked={editingGroup.welcome} />
+                    <label for="welcome-toggle" class="input-label" style="margin:0;cursor:pointer">
+                      <strong>Aktifkan Pesan Sambutan Otomatis (Auto Welcome)</strong>
+                    </label>
+                  </div>
+                  <small class="helper-text">Bot akan otomatis menyapa anggota baru yang masuk ke grup ini.</small>
+                </div>
+
+                {#if editingGroup.welcome}
+                  <div class="form-group full-width">
+                    <label for="grp-welcome-msg" class="input-label">Teks Pesan Sambutan:</label>
+                    <textarea id="grp-welcome-msg" class="nb-textarea" rows="3" bind:value={editingGroup.welcomeMsg} placeholder="Halo @user, selamat datang di grup!"></textarea>
+                    <small class="helper-text">Gunakan <code>@user</code> untuk menyebut nama anggota baru secara otomatis.</small>
+                  </div>
+                {/if}
+
+                <div class="form-group full-width" style="display:flex;gap:10px;margin-top:10px">
+                  <button class="nb-btn nb-btn-primary" onclick={handleSaveGroupSettings}>
+                    💾 Simpan Pengaturan Grup
+                  </button>
+                  <button class="nb-btn nb-btn-light" onclick={cancelEditGroup}>
+                    Batal
+                  </button>
+                </div>
+              </div>
+            </div>
+          {/if}
 
           <!-- Blacklist Section -->
           <div class="nb-card">

@@ -73,6 +73,17 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
     return;
   }
 
+  // 3b. Private Message (PM) Check
+  if (!isGroup && settings.allowPm === false && !isOwner) {
+    logCommand(sender, command, "BLOCKED");
+    await sock.sendMessage(
+      from,
+      { text: "⚠️ *Akses Ditolak*\n\nBot ini disetel khusus untuk digunakan di dalam **Grup WhatsApp**.\nSilakan masukkan bot ke grup kamu untuk menggunakan perintah." },
+      { quoted: msg }
+    );
+    return;
+  }
+
   // 4. Feature Toggle Check (PRD P4)
   if (!isFeatureEnabled(plugin.name)) {
     logCommand(sender, command, "BLOCKED");

@@ -38,7 +38,8 @@ export function getBotSettings(): BotSettings {
     stickerPack: map.sticker_pack || "nibol.my.id",
     stickerAuthor: map.sticker_author || "by @nibol",
     newsletterJid: map.newsletter_jid,
-    channelName: map.channel_name
+    channelName: map.channel_name,
+    allowPm: map.allow_pm !== false
   };
 }
 
