@@ -32,3 +32,5 @@ Thumbs.db
 # Editor & Agent files
 .claude/
 .vscode/
+data/session/
+data/session/
