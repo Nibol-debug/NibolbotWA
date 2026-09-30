@@ -15,8 +15,9 @@ export async function getVideoStreamUrl(videoId: string): Promise<string | null>
 
   const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
   const args = [
+    "--js-runtimes", "node:/usr/bin/node",
     "-g",
-    "-f", "best[ext=mp4]/18/22/best",
+    "-f", "18/best[ext=mp4]/bestaudio/best",
     "--no-playlist",
     "--no-warnings",
     ytUrl

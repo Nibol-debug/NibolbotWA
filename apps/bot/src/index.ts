@@ -299,7 +299,8 @@ Bun.serve({
       const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
       const proc = Bun.spawn([
         "yt-dlp",
-        "-f", "best[ext=mp4]/18/22/best",
+        "--js-runtimes", "node:/usr/bin/node",
+        "-f", "18/best[ext=mp4]/bestaudio/best",
         "-o", "-",
         "--no-playlist",
         "--no-warnings",

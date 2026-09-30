@@ -27,7 +27,7 @@ export default definePlugin({
   name: "play",
   category: "music",
   description: "Cari video/lagu dan tonton via In-App WebView WhatsApp / HTML5 Player",
-  commands: ["play", "p"],
+  commands: ["play", "p", "ythtml"],
   defaults: {
     enabled: true,
     cooldown: 5,
