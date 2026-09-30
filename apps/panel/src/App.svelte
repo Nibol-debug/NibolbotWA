@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
 
-  const API = 'http://localhost:3000';
+  const API = import.meta.env.VITE_API_URL || '';
 
   // Auth State (P1)
   let isAuthenticated = $state(false);

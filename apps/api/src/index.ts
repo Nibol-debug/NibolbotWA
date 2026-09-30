@@ -3,12 +3,26 @@ import { cors } from "@elysiajs/cors";
 import { jwt } from "@elysiajs/jwt";
 import { db } from "./db";
 import { renderGamePage } from "./games";
+import { renderPlayerPage } from "./player";
+import { renderRecordPlayerPage } from "./player-record";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const port = Number(process.env.PORT) || 3000;
 const botUrl = process.env.BOT_SERVICE_URL || "http://localhost:3001";
 const internalToken = process.env.INTERNAL_TOKEN || "secret";
+
+interface PVSession {
+  id: string;
+  filePath: string;
+  title: string;
+  channel: string;
+  duration: number;
+  createdAt: number;
+  expiresAt: number;
+  used: boolean;
+}
+const pvSessions = new Map<string, PVSession>();
 
 const panelDist = [
   join(import.meta.dir, "../../panel/dist"),
@@ -342,489 +356,124 @@ export const app = new Elysia()
       return "Stream unavailable";
     }
   })
-  .get("/p/:id", ({ params, set }) => {
-    const { id } = params;
-    set.headers["content-type"] = "text/html; charset=utf-8";
-
-    return `<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Nibolbot Video Player</title>
-  <meta property="og:title" content="Nibolbot Video Player">
-  <meta property="og:description" content="Putar video langsung di WhatsApp WebView / Browser">
-  <meta property="og:type" content="video.other">
-  <meta property="og:site_name" content="Nibolbot">
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
-  <style>
-    :root {
-      --primary: #10b981;
-      --primary-dark: #059669;
-      --bg: #090d0b;
-      --card: #131b16;
-      --border: #1f2e25;
-      --text: #f0fdf4;
-      --muted: #86a393;
-    }
-    * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
-    body {
-      font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      min-height: 100dvh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: flex-start;
-      overflow-x: hidden;
-    }
-    .wrapper {
-      width: 100%;
-      max-width: 600px;
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-      height: 100dvh;
-    }
-    /* Video viewport */
-    .video-box {
-      position: relative;
-      width: 100%;
-      background: #000;
-      aspect-ratio: 16/9;
-      max-height: 55vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-    }
-    video {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      background: #000;
-    }
-    /* Overlays */
-    .badge {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      background: rgba(16, 185, 129, 0.9);
-      color: #000;
-      font-weight: 700;
-      font-size: 0.7rem;
-      padding: 4px 8px;
-      border-radius: 4px;
-      letter-spacing: 0.05em;
-      z-index: 10;
-      pointer-events: none;
-    }
-    .big-play {
-      position: absolute;
-      width: 68px;
-      height: 68px;
-      border-radius: 50%;
-      background: var(--primary);
-      color: #000;
-      border: 3px solid #fff;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 1.8rem;
-      cursor: pointer;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
-      transition: transform 0.15s, opacity 0.2s;
-      z-index: 15;
-    }
-    .big-play:active { transform: scale(0.9); }
-    .big-play.hidden { opacity: 0; pointer-events: none; }
-    /* Loading spinner */
-    .spinner {
-      position: absolute;
-      width: 44px;
-      height: 44px;
-      border: 4px solid rgba(16,185,129,0.3);
-      border-top-color: var(--primary);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      z-index: 12;
-      display: none;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    /* Controls bar */
-    .controls {
-      background: rgba(19, 27, 22, 0.95);
-      border-bottom: 2px solid var(--border);
-      padding: 0.6rem 0.8rem;
-      display: flex;
-      flex-direction: column;
-      gap: 0.4rem;
-    }
-    .progress-wrap {
-      width: 100%;
-      height: 6px;
-      background: #23342a;
-      border-radius: 3px;
-      position: relative;
-      cursor: pointer;
-      padding: 4px 0;
-      background-clip: content-box;
-    }
-    .progress-fill {
-      height: 6px;
-      background: var(--primary);
-      width: 0%;
-      border-radius: 3px;
-      pointer-events: none;
-      transition: width 0.1s linear;
-    }
-    .control-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.5rem;
-    }
-    .ctrl-group {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    .cbtn {
-      background: none;
-      border: none;
-      color: var(--text);
-      font-size: 1.15rem;
-      width: 36px;
-      height: 36px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      border-radius: 6px;
-      transition: background 0.15s;
-    }
-    .cbtn:active { background: var(--border); }
-    .time-text {
-      font-size: 0.75rem;
-      color: var(--muted);
-      font-weight: 600;
-      white-space: nowrap;
-    }
-    .vol-slider {
-      width: 60px;
-      height: 4px;
-      accent-color: var(--primary);
-      cursor: pointer;
-    }
-    /* Details section */
-    .meta-box {
-      flex: 1;
-      padding: 1rem;
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-      overflow-y: auto;
-    }
-    .vtitle {
-      font-size: 1.05rem;
-      font-weight: 700;
-      line-height: 1.35;
-      color: var(--text);
-    }
-    .vinfo {
-      font-size: 0.8rem;
-      color: var(--muted);
-      display: flex;
-      gap: 0.6rem;
-      align-items: center;
-    }
-    .actions {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.5rem;
-      margin-top: 0.5rem;
-    }
-    .btn-act {
-      background: var(--card);
-      border: 1.5px solid var(--border);
-      color: var(--text);
-      padding: 0.6rem;
-      border-radius: 8px;
-      text-align: center;
-      font-size: 0.8rem;
-      font-weight: 600;
-      text-decoration: none;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.4rem;
-    }
-    .btn-act:active { border-color: var(--primary); }
-    .btn-back {
-      grid-column: 1 / -1;
-      background: var(--primary);
-      color: #000;
-      font-weight: 700;
-      border: none;
-    }
-    /* Status banner */
-    .status-msg {
-      font-size: 0.8rem;
-      color: var(--muted);
-      text-align: center;
-      min-height: 1.2em;
-    }
-    /* Error / Initial Loading State */
-    .center-state {
-      text-align: center;
-      padding: 3rem 1.5rem;
-    }
-    .center-state .ico { font-size: 2.5rem; margin-bottom: 0.5rem; }
-  </style>
-</head>
-<body>
-  <div class="wrapper" id="app">
-    <div class="center-state">
-      <div class="spinner" style="display:inline-block;position:static;margin-bottom:0.75rem;"></div>
-      <div style="font-weight:600;color:var(--muted)">Menyiapkan video...</div>
-    </div>
-  </div>
-
-  <script>
-    const T = "${id}";
-    const API = location.origin;
-    const app = document.getElementById("app");
-
-    function fmt(s) {
-      if (!s || isNaN(s)) return "0:00";
-      const m = Math.floor(s / 60);
-      const sec = Math.floor(s % 60);
-      return m + ":" + String(sec).padStart(2, "0");
-    }
-    function esc(s) {
-      const d = document.createElement("div");
-      d.textContent = s || "";
-      return d.innerHTML;
-    }
-
-    async function init() {
-      let info;
+    .ws("/ws/stream/:id", {
+    async open(ws) {
+      const id = ws.data.params.id;
+      console.log(`[WS] Client connected for stream: ${id}`);
       try {
-        const r = await fetch(API + "/api/player/" + T);
-        info = await r.json();
-      } catch (err) {
-        app.innerHTML = '<div class="center-state"><div class="ico">😵</div><b>Gagal terhubung ke server</b></div>';
-        return;
-      }
+        const streamRes = await fetch(`${botUrl}/stream/${id}`, {
+          headers: { "x-internal-token": internalToken }
+        });
 
-      if (info.error) {
-        app.innerHTML = '<div class="center-state"><div class="ico">⏰</div><b>Video Tidak Ditemukan atau Link Kedaluwarsa</b><p style="margin-top:.5rem;font-size:.8rem;color:var(--muted)">Kirim ulang perintah .play di WhatsApp.</p></div>';
-        return;
-      }
-
-      document.title = info.title + " - Nibolbot";
-
-      app.innerHTML = \`
-        <div class="video-box" id="vbox">
-          <div class="badge">🤖 NIBOLBOT</div>
-          <video
-            id="vid"
-            playsinline
-            webkit-playsinline
-            x5-playsinline
-            controls
-            autoplay
-            poster="\${info.thumbnail || ''}"
-            preload="metadata"
-          ></video>
-          <button class="big-play" id="bp">▶</button>
-          <div class="spinner" id="sp"></div>
-        </div>
-
-        <div class="controls">
-          <div class="progress-wrap" id="pbar">
-            <div class="progress-fill" id="pfill"></div>
-          </div>
-          <div class="control-row">
-            <div class="ctrl-group">
-              <button class="cbtn" id="pbtn" title="Play/Pause">▶</button>
-              <button class="cbtn" id="rew" title="-10s">⏪</button>
-              <button class="cbtn" id="fwd" title="+10s">⏩</button>
-              <span class="time-text"><span id="tcur">0:00</span> / <span id="tdur">\${fmt(info.duration)}</span></span>
-            </div>
-            <div class="ctrl-group">
-              <button class="cbtn" id="mbtn" title="Mute">🔊</button>
-              <input type="range" min="0" max="100" value="100" class="vol-slider" id="vol">
-              <button class="cbtn" id="fsbtn" title="Fullscreen">⛶</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="meta-box">
-          <div>
-            <div class="vtitle">\${esc(info.title)}</div>
-            <div class="vinfo" style="margin-top:4px;">
-              <span>👤 \${esc(info.channel)}</span>
-              <span>•</span>
-              <span>⏱️ \${fmt(info.duration)}</span>
-            </div>
-          </div>
-
-          <div class="status-msg" id="st"></div>
-
-          <div class="actions">
-            <a href="https://wa.me" class="btn-act btn-back">💬 Buka WhatsApp</a>
-            <div class="btn-act" style="cursor:default">🎧 .ytmp3 \${esc(info.videoId)}</div>
-            <div class="btn-act" style="cursor:default">🎬 .ytmp4 \${esc(info.videoId)}</div>
-          </div>
-        </div>
-      \`;
-
-      const vid = document.getElementById("vid"),
-            bp = document.getElementById("bp"),
-            sp = document.getElementById("sp"),
-            pbtn = document.getElementById("pbtn"),
-            pbar = document.getElementById("pbar"),
-            pfill = document.getElementById("pfill"),
-            tcur = document.getElementById("tcur"),
-            tdur = document.getElementById("tdur"),
-            rew = document.getElementById("rew"),
-            fwd = document.getElementById("fwd"),
-            vol = document.getElementById("vol"),
-            mbtn = document.getElementById("mbtn"),
-            fsbtn = document.getElementById("fsbtn"),
-            st = document.getElementById("st"),
-            vbox = document.getElementById("vbox");
-
-      let loaded = false;
-
-      function setStatus(t) { st.textContent = t; }
-
-      function loadVideo() {
-        if (!loaded) {
-          setStatus("⏳ Mengambil stream video...");
-          sp.style.display = "block";
-          bp.classList.add("hidden");
-          vid.src = API + "/stream/" + T;
-          vid.load();
-          loaded = true;
+        if (!streamRes.ok || !streamRes.body) {
+          ws.send("ERROR: Stream unavailable");
+          ws.close();
+          return;
         }
-      }
 
-      function togglePlay() {
-        loadVideo();
-        if (vid.paused) {
-          vid.play().then(() => {
-            pbtn.textContent = "⏸";
-            bp.classList.add("hidden");
-            setStatus("");
-          }).catch(err => {
-            console.warn("Play error:", err);
-            bp.classList.remove("hidden");
-            pbtn.textContent = "▶";
-          });
-        } else {
-          vid.pause();
-          pbtn.textContent = "▶";
-          bp.classList.remove("hidden");
+        const cl = streamRes.headers.get("content-length");
+        if (cl) {
+          ws.send(`TOTAL:${cl}`);
         }
-      }
 
-      bp.onclick = togglePlay;
-      pbtn.onclick = togglePlay;
-      vid.onclick = togglePlay;
-
-      rew.onclick = () => { vid.currentTime = Math.max(0, vid.currentTime - 10); };
-      fwd.onclick = () => { vid.currentTime = Math.min(vid.duration || 99999, vid.currentTime + 10); };
-
-      vid.onwaiting = () => { sp.style.display = "block"; };
-      vid.onplaying = () => {
-        sp.style.display = "none";
-        bp.classList.add("hidden");
-        pbtn.textContent = "⏸";
-        setStatus("");
-      };
-      vid.onpause = () => {
-        pbtn.textContent = "▶";
-        bp.classList.remove("hidden");
-      };
-      vid.oncanplay = () => {
-        sp.style.display = "none";
-        if (vid.duration) tdur.textContent = fmt(vid.duration);
-      };
-      vid.ontimeupdate = () => {
-        if (!vid.duration) return;
-        const pct = (vid.currentTime / vid.duration) * 100;
-        pfill.style.width = pct + "%";
-        tcur.textContent = fmt(vid.currentTime);
-      };
-      vid.onended = () => {
-        pbtn.textContent = "▶";
-        bp.classList.remove("hidden");
-        pfill.style.width = "0%";
-      };
-      vid.onerror = () => {
-        sp.style.display = "none";
-        bp.classList.remove("hidden");
-        setStatus("❌ Gagal memutar video. Coba refresh.");
-      };
-
-      // Progress bar seek (mouse + touch)
-      function seek(clientX) {
-        if (!vid.duration) return;
-        const rect = pbar.getBoundingClientRect();
-        const pos = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-        vid.currentTime = pos * vid.duration;
-      }
-      pbar.onclick = (e) => seek(e.clientX);
-      pbar.ontouchstart = (e) => { if (e.touches && e.touches[0]) seek(e.touches[0].clientX); };
-      pbar.ontouchmove = (e) => { if (e.touches && e.touches[0]) seek(e.touches[0].clientX); };
-
-      // Volume & mute
-      vol.oninput = () => {
-        vid.volume = vol.value / 100;
-        vid.muted = vid.volume === 0;
-        mbtn.textContent = vid.muted ? "🔇" : (vid.volume < 0.5 ? "🔉" : "🔊");
-      };
-      mbtn.onclick = () => {
-        vid.muted = !vid.muted;
-        mbtn.textContent = vid.muted ? "🔇" : "🔊";
-        if (!vid.muted && vid.volume === 0) {
-          vid.volume = 0.5;
-          vol.value = 50;
+        const reader = streamRes.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && value.byteLength > 0) {
+            const CHUNK_SIZE = 16384;
+            for (let offset = 0; offset < value.byteLength; offset += CHUNK_SIZE) {
+              const slice = value.subarray(offset, Math.min(offset + CHUNK_SIZE, value.byteLength));
+              ws.send(slice);
+            }
+          }
         }
-      };
 
-      // Fullscreen
-      fsbtn.onclick = () => {
-        if (!document.fullscreenElement) {
-          if (vbox.requestFullscreen) vbox.requestFullscreen();
-          else if (vid.webkitEnterFullscreen) vid.webkitEnterFullscreen(); // iOS / WebKit
-          else if (vbox.webkitRequestFullscreen) vbox.webkitRequestFullscreen();
-        } else {
-          if (document.exitFullscreen) document.exitFullscreen();
-        }
-      };
-
-      // Auto-trigger video load & play on user gesture
-      loadVideo();
-      vid.play().then(() => {
-        pbtn.textContent = "⏸";
-        bp.classList.add("hidden");
-      }).catch(() => {
-        // Autoplay blocked by browser policy, wait for tap on bp
-        sp.style.display = "none";
-        bp.classList.remove("hidden");
-        setStatus("Ketuk tombol ▶ untuk memutar video");
-      });
+        ws.send("END");
+        ws.close();
+      } catch (err: any) {
+        console.error(`[WS] Stream proxy error for ${id}:`, err?.message || err);
+        try {
+          ws.send("ERROR: Stream failed");
+          ws.close();
+        } catch {}
+      }
     }
+  })
+  .get("/p/:id", ({ params, set }) => {
+    set.headers["content-type"] = "text/html; charset=utf-8";
+    return renderPlayerPage(params.id);
+  })
+  // --- Recording Player Routes (/pv/:id & /ws/pv/:id) ---
+  .post("/api/pv/register", ({ body, headers, set }) => {
+    if (headers["x-internal-token"] !== internalToken) {
+      set.status = 401;
+      return { error: "Unauthorized" };
+    }
+    const raw = body as any;
+    const now = Date.now();
+    const session: PVSession = {
+      id: raw.id,
+      filePath: raw.filePath,
+      title: raw.title,
+      channel: raw.channel,
+      duration: raw.duration,
+      createdAt: now,
+      expiresAt: now + 5 * 60 * 1000, // TTL 5 menit
+      used: false
+    };
+    pvSessions.set(session.id, session);
+    // Hapus otomatis setelah TTL 5 menit
+    setTimeout(() => pvSessions.delete(session.id), 5 * 60 * 1000);
+    return { success: true, id: session.id };
+  })
+  .get("/api/pv/info/:id", ({ params, set }) => {
+    const s = pvSessions.get(params.id);
+    if (!s || Date.now() > s.expiresAt) {
+      set.status = 404;
+      return { error: "Session not found or expired" };
+    }
+    return { id: s.id, title: s.title, channel: s.channel, duration: s.duration };
+  })
+  .get("/pv/:id", ({ params, request, set }) => {
+    const s = pvSessions.get(params.id);
+    if (!s || Date.now() > s.expiresAt || s.used) {
+      set.status = 404;
+      return "Sesi rekaman player tidak valid, telah kedaluwarsa, atau sudah pernah digunakan.";
+    }
+    // Verifikasi akses: boleh diakses jika memiliki ID valid & belum expired
+    // Tandai sekali pakai
+    s.used = true;
+    set.headers["content-type"] = "text/html; charset=utf-8";
+    return renderRecordPlayerPage(params.id);
+  })
+  .ws("/ws/pv/:id", {
+    async open(ws) {
+      const id = ws.data.params.id;
+      const s = pvSessions.get(id);
+      if (!s || Date.now() > s.expiresAt || !existsSync(s.filePath)) {
+        ws.send("ERROR: Session expired or file not found");
+        ws.close();
+        return;
+      }
+      try {
+        const file = Bun.file(s.filePath);
+        const buf = Buffer.from(await file.arrayBuffer());
+        ws.send(`TOTAL:${buf.length}`);
 
-    init();
-  </script>
-</body>
-</html>`;
+        const CHUNK_SIZE = 16384;
+        for (let offset = 0; offset < buf.length; offset += CHUNK_SIZE) {
+          const slice = buf.subarray(offset, Math.min(offset + CHUNK_SIZE, buf.length));
+          ws.send(slice);
+          await Bun.sleep(5);
+        }
+        ws.send("END");
+        ws.close();
+      } catch (err: any) {
+        console.error(`[WS-PV] Stream error for ${id}:`, err);
+        try { ws.close(); } catch {}
+      }
+    }
   })
   // --- Mini Games (Dino Runner / Arcade) ---
   .get("/games", ({ set }) => {

@@ -83,13 +83,15 @@ if (count.c === 0) {
   }
 }
 
-// Seed default admin: nibol / nibolganteng if no admin exists
+// Seed default admin if no admin exists (configurable via env)
 export async function ensureDefaultAdmin() {
-  const admin = db.query("SELECT * FROM admin WHERE username = ?").get("nibol");
+  const username = process.env.ADMIN_USERNAME || "nibol";
+  const password = process.env.ADMIN_PASSWORD || "nibolganteng";
+  const admin = db.query("SELECT * FROM admin WHERE username = ?").get(username);
   if (!admin) {
-    const hash = await Bun.password.hash("nibolganteng");
-    db.run("INSERT OR REPLACE INTO admin (username, password_hash) VALUES (?, ?)", ["nibol", hash]);
-    console.log("🔑 Default admin initialized: nibol / nibolganteng");
+    const hash = await Bun.password.hash(password);
+    db.run("INSERT OR REPLACE INTO admin (username, password_hash) VALUES (?, ?)", [username, hash]);
+    console.log(`🔑 Default admin initialized: ${username} / ${password}`);
   }
 }
 ensureDefaultAdmin();
