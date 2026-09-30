@@ -138,7 +138,7 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
     args,
     fullText: bodyWithoutPrefix.slice(command.length).trim(),
     reply,
-    db: (await import("./db")).db,
+    db,
     settings
   };
 

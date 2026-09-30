@@ -2,9 +2,11 @@ import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
   type WASocket,
   type ConnectionState
 } from "@whiskeysockets/baileys";
+import initButtons from "buttons-warpper";
 import pino from "pino";
 import { Boom } from "@hapi/boom";
 import { existsSync, mkdirSync, rmSync, readFileSync, statSync, unlinkSync, readdirSync } from "node:fs";
@@ -54,10 +56,20 @@ async function connectToWhatsApp(phoneNumberToPair?: string) {
     version,
     logger: pino({ level: "silent" }),
     printQRInTerminal: true,
-    auth: state,
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, logger)
+    },
     browser: ["Ubuntu", "Chrome", "20.0.04"],
-    generateHighQualityLinkPreview: true
+    generateHighQualityLinkPreview: true,
+    defaultQueryTimeoutMs: 60_000
   });
+
+  try {
+    await initButtons(sock);
+  } catch (err: any) {
+    logger.warn({ err }, "buttons-warpper initialization error");
+  }
 
   sock.ev.on("creds.update", saveCreds);
 
@@ -73,7 +85,8 @@ async function connectToWhatsApp(phoneNumberToPair?: string) {
 
     if (connection === "close") {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const isSessionDead = statusCode === DisconnectReason.loggedOut || statusCode === 440;
+      const shouldReconnect = !isSessionDead;
       connectionStatus = "disconnected";
       activeQR = null;
       activePairingCode = null;
@@ -82,9 +95,10 @@ async function connectToWhatsApp(phoneNumberToPair?: string) {
       if (shouldReconnect) {
         setTimeout(connectToWhatsApp, 3000);
       } else {
-        logger.error("Logged out from WhatsApp. Session cleared.");
+        logger.error(`Session invalidated (code: ${statusCode}). Session cleared, ready for new pairing.`);
         rmSync(sessionDir, { recursive: true, force: true });
         mkdirSync(sessionDir, { recursive: true });
+        setTimeout(() => connectToWhatsApp(), 2000);
       }
     } else if (connection === "open") {
       connectionStatus = "online";

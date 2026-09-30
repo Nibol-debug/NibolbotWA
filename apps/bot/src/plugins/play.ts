@@ -190,7 +190,7 @@ export default definePlugin({
           sendInteractiveMessage(sock, {
             to: from,
             title: `🎬 ${song.title}`,
-            body: `🏢 ${song.channel}\n⏱️ ${formatDuration(song.duration)}`,
+            body: `🏢 ${song.channel}\n⏱️ ${formatDuration(song.duration)}\n\n▶️ *Buka Video:* ${playerUrl}`,
             footer: `${settings.botName} • In-App Video Player`,
             thumbnail: thumb || undefined,
             buttons,

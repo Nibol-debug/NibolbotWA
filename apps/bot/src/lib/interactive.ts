@@ -2,6 +2,7 @@ import { proto, generateWAMessageFromContent, prepareWAMessageMedia } from "@whi
 import type { WASocket } from "@whiskeysockets/baileys";
 import type { YouTubeResult } from "./youtube";
 import { formatDuration } from "./youtube";
+import sharp from "sharp";
 
 interface InteractiveButton {
   name: string;
@@ -63,6 +64,20 @@ export async function sendInteractiveMessage(sock: WASocket, opts: SendInteracti
     }
   };
 
+  // 1. Prioritaskan sock.sendInteractiveMessage dari buttons-warpper (menambahkan node biz dan bot)
+  if (typeof (sock as any).sendInteractiveMessage === "function") {
+    console.log(`\n[INTERACTIVE] Mengirim via buttons-warpper ke: ${opts.to}`);
+    return await (sock as any).sendInteractiveMessage(opts.to, {
+      title: opts.title,
+      text: opts.body,
+      footer: opts.footer,
+      header,
+      contextInfo: opts.contextInfo,
+      interactiveButtons: opts.buttons
+    });
+  }
+
+  // 2. Fallback manual dengan injeksi binary node tambahan
   const useVO = opts.useViewOnce === true;
   const messageContent: proto.IMessage = useVO
     ? {
@@ -76,15 +91,44 @@ export async function sendInteractiveMessage(sock: WASocket, opts: SendInteracti
         interactiveMessage: interactiveMsg
       };
 
-  const fullMsg = generateWAMessageFromContent(opts.to, messageContent, {});
+  const userJid = sock.authState?.creds?.me?.id || sock.user?.id;
+  const fullMsg = generateWAMessageFromContent(opts.to, messageContent, {
+    userJid,
+    timestamp: new Date()
+  });
+
+  const isPrivate = !opts.to.endsWith("@g.us");
+  const additionalNodes: any[] = [
+    {
+      tag: "biz",
+      attrs: {},
+      content: [
+        {
+          tag: "interactive",
+          attrs: { type: "native_flow", v: "1" },
+          content: [
+            {
+              tag: "native_flow",
+              attrs: { v: "9", name: "mixed" }
+            }
+          ]
+        }
+      ]
+    }
+  ];
+
+  if (isPrivate) {
+    additionalNodes.push({ tag: "bot", attrs: { biz_bot: "1" } });
+  }
 
   console.log("\n==================== [RELAY PAYLOAD FINAL] ====================");
-  console.log(`To: ${opts.to} | Wrapper: ${useVO ? "viewOnceMessage" : "direct"}`);
+  console.log(`To: ${opts.to} | Wrapper: ${useVO ? "viewOnceMessage" : "direct"} | isPrivate: ${isPrivate}`);
   console.log(JSON.stringify(fullMsg.message, null, 2));
   console.log("===============================================================\n");
 
   await sock.relayMessage(opts.to, fullMsg.message!, {
-    messageId: fullMsg.key.id!
+    messageId: fullMsg.key.id!,
+    additionalNodes
   });
 }
 
@@ -176,7 +220,11 @@ export async function fetchThumbnailBuffer(url: string): Promise<Buffer | null> 
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
+    const buf = Buffer.from(await res.arrayBuffer());
+    return await sharp(buf)
+      .resize(300, 300, { fit: 'cover' })
+      .jpeg({ quality: 80 })
+      .toBuffer();
   } catch {
     return null;
   }

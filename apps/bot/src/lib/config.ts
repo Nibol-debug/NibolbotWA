@@ -52,7 +52,7 @@ export function getApiUrl(): string {
   }
 
   // 4. Default public domain (NEVER localhost / internal container name)
-  return "https://nibol.my.id";
+  return "https://nibol.my.id:2235";
 }
 
 export function getPlayerUrl(id: string): string {
