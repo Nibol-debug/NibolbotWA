@@ -3,6 +3,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
+  Browsers,
   type WASocket,
   type ConnectionState
 } from "@whiskeysockets/baileys";
@@ -43,9 +44,26 @@ let sock: WASocket | null = null;
 let connectionStatus: "online" | "pairing" | "disconnected" = "disconnected";
 let activePairingCode: string | null = null;
 let activeQR: string | null = null;
+let keepAliveTimer: any = null;
+let reconnectTimer: any = null;
 const startTime = Date.now();
 
 async function connectToWhatsApp(phoneNumberToPair?: string) {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  if (sock) {
+    try {
+      sock.ev.removeAllListeners("connection.update");
+      sock.ev.removeAllListeners("creds.update");
+      sock.ev.removeAllListeners("messages.upsert");
+      sock.end(undefined);
+    } catch {}
+    sock = null;
+  }
+
   await loadPlugins();
 
   const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
@@ -55,14 +73,22 @@ async function connectToWhatsApp(phoneNumberToPair?: string) {
   sock = makeWASocket({
     version,
     logger: pino({ level: "silent" }),
-    printQRInTerminal: true,
+    printQRInTerminal: false,
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger)
     },
-    browser: ["Ubuntu", "Chrome", "20.0.04"],
+    browser: Browsers.ubuntu("Chrome"),
     generateHighQualityLinkPreview: true,
-    defaultQueryTimeoutMs: 60_000
+    syncFullHistory: false,
+    markOnlineOnConnect: true,
+    keepAliveIntervalMs: 25_000,
+    connectTimeoutMs: 60_000,
+    defaultQueryTimeoutMs: 60_000,
+    retryRequestDelayMs: 2_000,
+    maxMsgRetryCount: 5,
+    fireInitQueries: true,
+    getMessage: async () => undefined
   });
 
   try {
@@ -86,25 +112,49 @@ async function connectToWhatsApp(phoneNumberToPair?: string) {
     if (connection === "close") {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const isSessionDead = statusCode === DisconnectReason.loggedOut || statusCode === 440;
+      const isRestartRequired = statusCode === DisconnectReason.restartRequired; // 515
       const shouldReconnect = !isSessionDead;
+
       connectionStatus = "disconnected";
       activeQR = null;
       activePairingCode = null;
+      if (keepAliveTimer) {
+        clearInterval(keepAliveTimer);
+        keepAliveTimer = null;
+      }
+
       logger.warn(`Connection closed (code: ${statusCode}), reconnecting: ${shouldReconnect}`);
 
-      if (shouldReconnect) {
-        setTimeout(connectToWhatsApp, 3000);
-      } else {
-        logger.error(`Session invalidated (code: ${statusCode}). Session cleared, ready for new pairing.`);
+      if (isSessionDead) {
+        logger.error(`Session invalidated by user/device logout (code: ${statusCode}). Session cleared, ready for new pairing.`);
         rmSync(sessionDir, { recursive: true, force: true });
         mkdirSync(sessionDir, { recursive: true });
-        setTimeout(() => connectToWhatsApp(), 2000);
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => connectToWhatsApp(), 2000);
+      } else if (isRestartRequired) {
+        // Fast restart without delay when WA requests 515 restart
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => connectToWhatsApp(), 1000);
+      } else {
+        // Normal network reconnect with backoff
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(() => connectToWhatsApp(), 3000);
       }
     } else if (connection === "open") {
       connectionStatus = "online";
       activePairingCode = null;
       activeQR = null;
       logger.info("✅ WhatsApp Bot connected successfully via Baileys!");
+
+      // Start periodic heartbeat presence keep-alive (every 25s) to prevent idle NAT/VPS socket drops
+      if (keepAliveTimer) clearInterval(keepAliveTimer);
+      keepAliveTimer = setInterval(async () => {
+        if (sock && connectionStatus === "online") {
+          try {
+            await sock.sendPresenceUpdate("available");
+          } catch {}
+        }
+      }, 25_000);
     }
   });
 
@@ -113,18 +163,36 @@ async function connectToWhatsApp(phoneNumberToPair?: string) {
     connectionStatus = "pairing";
     const cleanedNumber = phoneNumberToPair.replace(/[^0-9]/g, "");
     logger.info(`Requesting pairing code for: ${cleanedNumber}`);
+
+    // Tunggu socket siap (QR pertama kali dikirim oleh server WA) sebelum request pairing code
+    const pairingListener = sock.ev.on("connection.update", async ({ qr }) => {
+      if (qr && !activePairingCode) {
+        try {
+          if (sock && !sock.authState.creds.registered) {
+            const code = await sock.requestPairingCode(cleanedNumber);
+            activePairingCode = code;
+            activeQR = null;
+            logger.info(`🔑 Pairing Code: ${code}`);
+          }
+        } catch (err: any) {
+          logger.error({ err }, "Failed to generate pairing code");
+        }
+      }
+    });
+
+    // Fallback jika QR sudah lewat atau terlambat
     setTimeout(async () => {
-      try {
-        if (sock) {
+      if (!activePairingCode && sock && !sock.authState.creds.registered) {
+        try {
           const code = await sock.requestPairingCode(cleanedNumber);
           activePairingCode = code;
           activeQR = null;
-          logger.info(`🔑 Pairing Code: ${code}`);
+          logger.info(`🔑 Pairing Code (fallback): ${code}`);
+        } catch (err) {
+          logger.warn({ err }, "Fallback pairing code request");
         }
-      } catch (err) {
-        logger.error({ err }, "Failed to generate pairing code");
       }
-    }, 2000);
+    }, 4000);
   }
 
   // Message handler
@@ -188,8 +256,16 @@ Bun.serve({
 
     if (url.pathname === "/pair" && req.method === "POST") {
       const body = await req.json() as { phone?: string };
-      // Reset session for fresh pairing
-      if (sock) sock.end(new Error("Re-pair requested"));
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (sock) {
+        try {
+          sock.ev.removeAllListeners("connection.update");
+          sock.ev.removeAllListeners("creds.update");
+          sock.ev.removeAllListeners("messages.upsert");
+          sock.end(undefined);
+        } catch {}
+        sock = null;
+      }
       rmSync(sessionDir, { recursive: true, force: true });
       mkdirSync(sessionDir, { recursive: true });
       activeQR = null;
@@ -199,13 +275,31 @@ Bun.serve({
     }
 
     if (url.pathname === "/restart" && req.method === "POST") {
-      sock?.end(new Error("Manual restart from panel"));
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (sock) {
+        try {
+          sock.ev.removeAllListeners("connection.update");
+          sock.ev.removeAllListeners("creds.update");
+          sock.ev.removeAllListeners("messages.upsert");
+          sock.end(undefined);
+        } catch {}
+        sock = null;
+      }
       connectToWhatsApp();
       return Response.json({ success: true, message: "Restarting socket" });
     }
 
     if (url.pathname === "/logout" && req.method === "POST") {
-      await sock?.logout();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (sock) {
+        try {
+          sock.ev.removeAllListeners("connection.update");
+          sock.ev.removeAllListeners("creds.update");
+          sock.ev.removeAllListeners("messages.upsert");
+          await sock.logout().catch(() => {});
+        } catch {}
+        sock = null;
+      }
       rmSync(sessionDir, { recursive: true, force: true });
       mkdirSync(sessionDir, { recursive: true });
       connectionStatus = "disconnected";
