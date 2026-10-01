@@ -318,6 +318,12 @@ export async function handleIncomingMessage(sock: WASocket, msg: proto.IWebMessa
       };
     }
 
+    if (isGroup) {
+      try {
+        await (sock as any).authState?.keys?.set?.({ "sender-key-memory": { [from]: null } });
+      } catch {}
+    }
+
     try {
       const res = await sock.sendMessage(from, payload, { quoted: msg });
       if (res?.key?.id && res.message) {

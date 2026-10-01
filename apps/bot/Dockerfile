@@ -17,6 +17,7 @@ RUN bun install --filter @nibolbot/bot
 # Copy source
 COPY packages ./packages
 COPY apps/bot ./apps/bot
+RUN bun apps/bot/scripts/patch-baileys.ts
 
 WORKDIR /app/apps/bot
 EXPOSE 3001
