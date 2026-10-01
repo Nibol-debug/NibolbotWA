@@ -1,8 +1,9 @@
 import { definePlugin } from "@nibolbot/shared";
 import { downloadMediaMessage } from "@whiskeysockets/baileys";
 import sharp from "sharp";
+import { Image as WebPImage } from "node-webpmux";
 
-function addExif(webpBuffer: Buffer, pack: string, author: string): Buffer {
+async function addExif(webpBuffer: Buffer, pack: string, author: string): Promise<Buffer> {
   try {
     const json = {
       "sticker-pack-id": "nibolbot",
@@ -19,36 +20,12 @@ function addExif(webpBuffer: Buffer, pack: string, author: string): Buffer {
     const exif = Buffer.concat([exifAttr, jsonBuff]);
     exif.writeUIntLE(jsonBuff.length, 14, 4);
 
-    if (webpBuffer.toString("utf8", 0, 4) !== "RIFF" || webpBuffer.toString("utf8", 8, 12) !== "WEBP") {
-      return webpBuffer;
-    }
-
-    const exifChunkHeader = Buffer.from("EXIF");
-    const sizeBuf = Buffer.alloc(4);
-    sizeBuf.writeUInt32LE(exif.length, 0);
-    const pad = exif.length % 2 === 1 ? Buffer.from([0x00]) : Buffer.alloc(0);
-    const fullExifChunk = Buffer.concat([exifChunkHeader, sizeBuf, exif, pad]);
-
-    let offset = 12;
-    const chunks: Buffer[] = [];
-    while (offset < webpBuffer.length) {
-      const chunkId = webpBuffer.toString("utf8", offset, offset + 4);
-      const chunkSize = webpBuffer.readUInt32LE(offset + 4);
-      const chunkFullSize = 8 + chunkSize + (chunkSize % 2 === 1 ? 1 : 0);
-      if (chunkId !== "EXIF") {
-        chunks.push(webpBuffer.subarray(offset, offset + chunkFullSize));
-      }
-      offset += chunkFullSize;
-    }
-
-    const newPayload = Buffer.concat([...chunks, fullExifChunk]);
-    const newRiffHeader = Buffer.alloc(12);
-    newRiffHeader.write("RIFF", 0);
-    newRiffHeader.writeUInt32LE(newPayload.length + 4, 4);
-    newRiffHeader.write("WEBP", 8);
-
-    return Buffer.concat([newRiffHeader, newPayload]);
-  } catch {
+    const img = new WebPImage();
+    await img.load(webpBuffer);
+    img.exif = exif;
+    return await img.save(null);
+  } catch (err: any) {
+    console.warn("[STICKER] Failed to embed EXIF:", err?.message || err);
     return webpBuffer;
   }
 }
@@ -89,7 +66,7 @@ export default definePlugin({
       .webp({ quality: 80 })
       .toBuffer();
 
-    const webp = addExif(
+    const webp = await addExif(
       webpRaw,
       settings.stickerPack || "nibolbot.my.id",
       settings.stickerAuthor || "by @nibol"
